@@ -1,0 +1,496 @@
+// Jadvix CRM — MongoDB (Atlas) schema.
+//
+// The spec's canonical model is implemented verbatim: every model, field,
+// default, @@unique and @@index listed there is present and unchanged.
+//
+// It is then EXTENDED — additively, never by replacement — with the fields the
+// existing frontend already drives, because the brief is "the exact frontend
+// existing functionalities". Each extension block is marked FRONTEND-PARITY and
+// says which frontend type it carries. Nothing in the canonical model was
+// dropped, renamed or re-typed; enums only gained members.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+/* ----------------------------------------------------------------- enums -- */
+
+enum Role {
+  developer
+  sales
+  qualityCheck
+  manager
+  superAdmin
+  client
+  vendor
+  // FRONTEND-PARITY: EMPLOYEE_ROLES includes "Team Leader", which has no
+  // canonical member. Projects treat teamLeader exactly like manager.
+  teamLeader
+}
+
+enum EmpType {
+  employee
+  manager
+  admin
+}
+
+enum CurrentStatus {
+  idle
+  workAssigned
+  break
+  leave
+}
+
+enum EmpStatus {
+  fullTime
+  partTime
+  contractBased
+}
+
+enum EntityState {
+  invited
+  active
+  disabled
+}
+
+enum ProjectState {
+  planning
+  active // frontend "On Track"
+  onHold
+  completed // frontend "Delivered"
+  cancelled
+  // FRONTEND-PARITY: PROJECT_STATUSES also has "At Risk" and "Delayed".
+  atRisk
+  delayed
+}
+
+enum MemberRole {
+  manager
+  member
+}
+
+enum MemberState {
+  invited
+  accepted
+  declined
+}
+
+enum TaskState {
+  todo // frontend "New"
+  inProgress
+  inReview
+  done
+  blocked
+  failed
+  // FRONTEND-PARITY: TASK_STATUSES distinguishes "New" from "Backlog".
+  backlog
+}
+
+enum Priority {
+  low
+  medium
+  high
+  urgent
+}
+
+// FRONTEND-PARITY: QcVerdict / MilestoneStatus / SecretEnv / TaskOrigin.kind.
+enum QcVerdict {
+  Approved
+  Corrections
+  Error
+}
+
+enum MilestoneStatus {
+  planned
+  inProgress
+  done
+  delayed
+}
+
+enum SecretEnv {
+  local
+  development
+  staging
+  production
+}
+
+enum BugSeverity {
+  Critical
+  Major
+  Minor
+}
+
+/* ------------------------------------------------------ composite types -- */
+
+type ChecklistItem {
+  id    String
+  label String
+  done  Boolean @default(false)
+
+  // FRONTEND-PARITY: ChecklistItem carries two independent numbers —
+  //   score  0..1, how far along the line is (drives task completion)
+  //   points what the line costs each assignee if QC rejects it
+  // `done` stays authoritative for the canonical model and is kept in sync
+  // with `score >= 1` by the task service.
+  score  Float @default(0)
+  points Int   @default(1)
+}
+
+// FRONTEND-PARITY: Milestone — the client-facing delivery plan on a project.
+type Milestone {
+  id     String
+  label  String
+  due    DateTime
+  status MilestoneStatus @default(planned)
+  note   String?
+}
+
+// FRONTEND-PARITY: SecretEntry — project configuration vault.
+// Values are stored as given; access is restricted server-side (never the
+// client portal, never a plain member). Treat as low-sensitivity config only.
+type SecretEntry {
+  id        String
+  key       String
+  value     String
+  env       SecretEnv
+  note      String?
+  updatedAt DateTime
+  updatedBy String
+}
+
+// FRONTEND-PARITY: TaskUpdate — append-only audit trail line on a task.
+type TaskUpdateEntry {
+  id      String
+  at      DateTime
+  by      String
+  summary String
+}
+
+// FRONTEND-PARITY: QcReview.affected — KRA move per person, frozen at review time.
+type QcAffected {
+  userId String
+  from   Int
+  to     Int
+}
+
+// FRONTEND-PARITY: QcReview — append-only QC history on a task. An Error
+// verdict is what deducts KRA; see modules/tasks/qc.service.ts.
+type QcReview {
+  id             String
+  at             DateTime
+  by             String
+  byUserId       String?
+  verdict        QcVerdict
+  note           String?
+  failedItemIds  String[]
+  pointsDeducted Int       @default(0)
+  affected       QcAffected[]
+}
+
+// FRONTEND-PARITY: TaskOrigin — a defect raised in Proposed Bugs becomes a task.
+type TaskOrigin {
+  kind        String // "qc-bug"
+  severity    BugSeverity
+  raisedBy    String
+  raisedByUserId String?
+  foundIn     String?
+}
+
+// FRONTEND-PARITY: WorkspaceSettings — per-company workspace preferences.
+type WorkspaceSettings {
+  autoEmployeeId Boolean @default(true)
+  defaultBranch  String?
+}
+
+/* ---------------------------------------------------------------- models -- */
+
+model Company {
+  id              String      @id @default(auto()) @map("_id") @db.ObjectId
+  companyName     String
+  companyAddress  String
+  linkedinProfile String?
+  companyWebsite  String
+  about           String
+  ownerName       String
+  email           String      @unique
+  headBranch      String
+  state           EntityState @default(invited) // active once owner sets password
+  users           User[]
+  branches        Branch[]
+  projects        Project[]
+  tasks           Task[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // FRONTEND-PARITY: WorkspacePrefs (auto employee IDs, pinned default branch).
+  settings      WorkspaceSettings?
+  notifications Notification[]
+  clients       Client[]
+}
+
+model Branch {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  companyId String   @db.ObjectId
+  company   Company  @relation(fields: [companyId], references: [id])
+  name      String
+  isHead    Boolean  @default(false)
+  users     User[]
+  createdAt DateTime @default(now())
+
+  // Where the office is, and what it trades in.
+  //
+  // `currency` is DERIVED from `country` by lib/countries.ts on every write and
+  // is never taken from the request — a client that could name both could pair
+  // a country with the wrong currency and quietly corrupt every figure reported
+  // against the branch. Nullable because branches created before these existed
+  // have none, and a branch with no country has no currency to invent.
+  city     String?
+  country  String? // ISO 3166-1 alpha-2
+  currency String? // ISO 4217, derived from `country`
+
+  @@index([companyId])
+}
+
+model User {
+  id              String        @id @default(auto()) @map("_id") @db.ObjectId
+  companyId       String        @db.ObjectId
+  company         Company       @relation(fields: [companyId], references: [id])
+  name            String
+  email           String
+  empId           String        @unique // auto-generated, editable
+  passwordHash    String?
+  roles           Role[]
+  empType         EmpType       @default(employee)
+  empStatus       EmpStatus     @default(fullTime)
+  currentStatus   CurrentStatus @default(idle)
+  branchId        String?       @db.ObjectId
+  branch          Branch?       @relation(fields: [branchId], references: [id])
+  kra             Int           @default(100)
+  openWork        Int           @default(0)
+  isOwner         Boolean       @default(false)
+  state           EntityState   @default(invited)
+  moduleAccess    String[]
+  reportsToId     String?       @db.ObjectId
+  reportsTo       User?         @relation("Reports", fields: [reportsToId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reports         User[]        @relation("Reports")
+  inviteTokenHash String?
+  inviteExpiresAt DateTime?
+  resetTokenHash  String?
+  resetExpiresAt  DateTime?
+  memberships     ProjectMember[]
+  createdProjects Project[]     @relation("ProjectCreatedBy")
+  assignedTasks   Task[]        @relation("TaskAssignee")
+  createdTasks    Task[]        @relation("TaskCreatedBy")
+  kraEvents       KraEvent[]
+  refreshTokens   RefreshToken[]
+  joinedAt        DateTime      @default(now()) // = createdAt
+  updatedAt       DateTime      @updatedAt
+
+  // FRONTEND-PARITY: Employee.phone / Employee.tone (avatar colour).
+  phone String?
+  tone  String @default("blue")
+  // Login throttling — a per-account lockout that survives a restart, because
+  // the API is stateless and must not keep counters in instance memory.
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+  lastLoginAt      DateTime?
+
+  notifications Notification[] @relation("NotificationTo")
+
+  @@unique([companyId, email])
+  @@index([companyId])
+  @@index([reportsToId])
+}
+
+model Project {
+  id          String          @id @default(auto()) @map("_id") @db.ObjectId
+  companyId   String          @db.ObjectId
+  company     Company         @relation(fields: [companyId], references: [id])
+  name        String
+  description String?
+  state       ProjectState    @default(planning)
+  createdById String          @db.ObjectId
+  createdBy   User            @relation("ProjectCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  members     ProjectMember[]
+  tasks       Task[]
+  progress    Int             @default(0)
+  startDate   DateTime?
+  dueDate     DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  // FRONTEND-PARITY: Project.code / client / clientId / problemStatement /
+  // solution / plan / secrets. `clientId` points at the CRM's own client list,
+  // which still lives in the frontend mock store, so it is a plain string.
+  code             String?
+  client           String?
+  clientId         String?
+  problemStatement String?
+  solution         String?
+  plan             Milestone[]
+  secrets          SecretEntry[]
+
+  @@index([companyId])
+}
+
+model ProjectMember {
+  id          String      @id @default(auto()) @map("_id") @db.ObjectId
+  projectId   String      @db.ObjectId
+  project     Project     @relation(fields: [projectId], references: [id])
+  userId      String      @db.ObjectId
+  user        User        @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  role        MemberRole // manager (team lead) or member
+  state       MemberState @default(invited) // must accept to become active
+  invitedById String      @db.ObjectId
+  invitedAt   DateTime    @default(now())
+  respondedAt DateTime?
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+model Task {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  companyId   String    @db.ObjectId
+  company     Company   @relation(fields: [companyId], references: [id])
+  projectId   String    @db.ObjectId
+  project     Project   @relation(fields: [projectId], references: [id])
+  title       String
+  description String?
+  assigneeId  String?   @db.ObjectId
+  assignee    User?     @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdById String    @db.ObjectId
+  createdBy   User      @relation("TaskCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  state       TaskState @default(todo)
+  priority    Priority  @default(medium)
+  kraPoints   Int       @default(0) // points at stake
+  kraApplied  Boolean   @default(false) // guard against double-deduction
+  checklist   ChecklistItem[]
+  dueDate     DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // FRONTEND-PARITY. A frontend task serves several projects and several
+  // assignees, so the canonical single-valued `projectId` / `assigneeId` are
+  // kept as the PRIMARY of each list and the full lists live alongside.
+  // The service keeps projectId === projectIds[0] and assigneeId === assigneeIds[0].
+  projectIds  String[] @db.ObjectId
+  assigneeIds String[] @db.ObjectId
+  reportToIds String[] @db.ObjectId
+  taskCode    String? // human-facing "TSK-001"
+  // 1..5, the frontend's P1–P5. `priority` above stays the canonical field and
+  // is derived from this: 1 urgent, 2 high, 3 medium, 4-5 low.
+  priorityLevel Int             @default(3)
+  startDate     DateTime?
+  endDate       DateTime?
+  prUrl         String?
+  origin        TaskOrigin?
+  updates       TaskUpdateEntry[]
+  qcReviews     QcReview[]
+
+  @@index([projectId])
+  @@index([assigneeId])
+  @@index([companyId])
+  @@index([companyId, state])
+}
+
+model KraEvent {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  companyId    String   @db.ObjectId
+  userId       String   @db.ObjectId
+  user         User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  taskId       String?  @db.ObjectId
+  delta        Int // negative = deduction
+  reason       String
+  balanceAfter Int
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([companyId])
+}
+
+model RefreshToken {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String    @db.ObjectId
+  user      User      @relation(fields: [userId], references: [id])
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+/// The master's refresh sessions.
+///
+/// Separate from RefreshToken because that model's `userId` is a required
+/// relation to User and the master has no User row — it authenticates against
+/// MASTER_PASSWORD_HASH. Without this the master had no refresh token at all,
+/// so a browser reload lost the session outright: the access token lives in
+/// memory by design and there was nothing to restore it from.
+model MasterSession {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+}
+
+// FRONTEND-PARITY: Client — an account the company delivers for.
+// Projects reference it by id, which is how a project gets a real client rather
+// than a free-text name.
+model Client {
+  id        String       @id @default(auto()) @map("_id") @db.ObjectId
+  companyId String       @db.ObjectId
+  company   Company      @relation(fields: [companyId], references: [id])
+  code      String // human-facing, e.g. CL-01
+  name      String
+  contact   String
+  email     String
+  phone     String?
+  industry  String?
+  /// Lifetime value, stored as a number so it can be summed.
+  value     Int          @default(0)
+  since     String?
+  status    ClientStatus @default(onboarding)
+  notes     String?
+  tone      String       @default("blue")
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@unique([companyId, code])
+  @@index([companyId])
+}
+
+enum ClientStatus {
+  active
+  onboarding
+  dormant
+}
+
+// FRONTEND-PARITY: Notification — one row per recipient, never broadcast.
+// Emitted by the task and project flows so nothing the frontend used to raise
+// in localStorage is lost once those modules talk to the API.
+model Notification {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  companyId String   @db.ObjectId
+  company   Company  @relation(fields: [companyId], references: [id])
+  toUserId  String   @db.ObjectId
+  to        User     @relation("NotificationTo", fields: [toUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  kind      String
+  title     String
+  detail    String
+  read      Boolean  @default(false)
+  taskId    String?  @db.ObjectId
+  projectId String?  @db.ObjectId
+  createdAt DateTime @default(now())
+
+  @@index([toUserId, read])
+  @@index([companyId])
+}
