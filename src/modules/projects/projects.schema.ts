@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { objectId, optionalIsoDate, optionalText, text } from "../../middleware/validate";
+import {
+  objectId,
+  optionalIsoDate,
+  optionalRichText,
+  optionalText,
+  text,
+} from "../../middleware/validate";
 
 export const projectStateEnum = z.enum([
   "planning",
@@ -19,12 +25,15 @@ const idList = (max: number) => z.array(objectId).max(max).default([]);
 export const createProjectSchema = z
   .object({
     name: text(160),
-    description: optionalText(4000),
+    // Rich text: the cap covers the markup as well as the words, which is why
+    // it is five times the old plain-text one for roughly the same amount of
+    // writing. Sanitised on the way in — see src/lib/richText.ts.
+    description: optionalRichText(20000),
     code: optionalText(32),
     client: optionalText(160),
     clientId: optionalText(64),
-    problemStatement: optionalText(4000),
-    solution: optionalText(4000),
+    problemStatement: optionalRichText(20000),
+    solution: optionalRichText(20000),
     state: projectStateEnum.default("planning"),
     startDate: optionalIsoDate,
     dueDate: optionalIsoDate,

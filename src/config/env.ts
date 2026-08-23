@@ -76,6 +76,53 @@ const schema = z.object({
     .default("")
     .transform((v) => v.replace(/\s+/g, "")),
   MAIL_FROM: z.string().min(1).default("Jadvix <no-reply@jadvix.local>"),
+
+  /*
+   * Where task attachments are written.
+   *
+   * A directory on a mounted volume, NOT anywhere under the app. Files land
+   * here under a server-generated random key; nothing from the request ever
+   * contributes to the path. Relative paths resolve against the process cwd.
+   */
+  UPLOAD_DIR: z.string().min(1).default("./var/uploads"),
+  /** Hard ceiling per file. The stream is aborted the moment it is passed. */
+  UPLOAD_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(100 * 1024 * 1024)
+    .default(10 * 1024 * 1024),
+
+  /*
+   * ImageKit, the object store attachments actually live in once configured.
+   *
+   * All four are optional so the API still boots — and every upload still
+   * works — on a machine that has never seen an ImageKit account. Absent, the
+   * local-disk driver is used exactly as before; present, the same interface
+   * is served by ImageKit instead. There is no third state: a half-filled
+   * configuration is treated as absent rather than failing at the first upload.
+   *
+   * IMAGEKIT_PRIVATE_KEY is a SECRET and is read only by this process. It signs
+   * uploads and delivery URLs server-side and must never be handed to a
+   * browser; the client never talks to ImageKit directly, it talks to us.
+   */
+  IMAGEKIT_PUBLIC_KEY: z.string().optional().default(""),
+  IMAGEKIT_PRIVATE_KEY: z.string().optional().default(""),
+  IMAGEKIT_URL_ENDPOINT: z
+    .string()
+    .optional()
+    .default("")
+    .transform((v) => v.trim().replace(/\/+$/, "")),
+  /** Root folder every tenant's files are nested under. */
+  IMAGEKIT_FOLDER: z
+    .string()
+    .optional()
+    .default("/jadvix")
+    .transform((v) => {
+      const trimmed = v.trim().replace(/\/+$/, "");
+      if (!trimmed) return "/jadvix";
+      return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+    }),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -101,6 +148,16 @@ export const env = Object.freeze({
   /** Mail is only actually sent once an App Password is present. */
   mailEnabled: Boolean(raw.GMAIL_USER && raw.GMAIL_APP_PASSWORD),
   masterLoginEnabled: raw.MASTER_PASSWORD_HASH.length > 0,
+  /*
+   * Attachments go to ImageKit only when all three credentials are present.
+   *
+   * Deliberately an all-or-nothing switch. A deployment with a URL endpoint but
+   * no private key cannot sign anything, so treating it as "enabled" would fail
+   * every upload; treating it as absent falls back to local disk, which works.
+   */
+  imagekitEnabled: Boolean(
+    raw.IMAGEKIT_PRIVATE_KEY && raw.IMAGEKIT_PUBLIC_KEY && raw.IMAGEKIT_URL_ENDPOINT,
+  ),
 });
 
 export type Env = typeof env;

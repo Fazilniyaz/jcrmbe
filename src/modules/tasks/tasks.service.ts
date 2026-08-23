@@ -128,6 +128,25 @@ async function readableTask(auth: UserAuth, id: string): Promise<TaskRow> {
   return task;
 }
 
+/**
+ * The task-access guard, for modules that hang off a task.
+ *
+ * Attachments live under /tasks/:id/attachments and must answer exactly the
+ * questions the task itself answers — is it in your company, can you see it,
+ * are you on the team — so they ask this rather than re-deriving it. Attaching
+ * and removing a file is `work`: it is delivering the task, not re-scoping it,
+ * so it sits with the assignees and not only with the manager.
+ */
+export async function assertTaskAccess(
+  auth: UserAuth,
+  taskId: string,
+  level: "read" | "full" | "work",
+): Promise<TaskRow> {
+  const task = await readableTask(auth, taskId);
+  if (level !== "read") await assertCanEdit(auth, task, level);
+  return task;
+}
+
 /** Accepted manager on any of these projects — the "can run this work" test. */
 async function isProjectManager(auth: UserAuth, projectIds: readonly string[]): Promise<boolean> {
   if (isSuperAdmin(auth)) return true;
@@ -175,23 +194,53 @@ async function isProjectTeam(auth: UserAuth, projectIds: readonly string[]): Pro
  * this is finished"; naming what the work is stays with the manager.
  */
 async function assertCanEdit(auth: UserAuth, task: TaskRow, level: "full" | "work") {
+  /*
+   * Free clauses first.
+   *
+   * All of these are an OR, so the order changes nothing about who passes —
+   * only how much it costs to find out. `isProjectManager` and `isProjectTeam`
+   * are round trips to a remote database; being named on the task is already in
+   * hand. Asking the cheap questions first means the common case (an assignee
+   * moving their own task, someone deleting the file they just attached) is
+   * answered without touching the database at all.
+   */
+  if (level === "work") {
+    if (task.assigneeIds.includes(auth.userId)) return;
+    // Supervising the task counts too — reportTo is who the work answers to.
+    if (task.reportToIds.includes(auth.userId)) return;
+  } else if (task.createdById === auth.userId) {
+    return;
+  }
+
   if (await isProjectManager(auth, task.projectIds)) return;
 
   if (level === "full") {
-    if (task.createdById === auth.userId) return;
     throw ApiError.forbidden(
       "Only the project's manager can change what this task is. You can still move its status and score its subtasks.",
     );
   }
 
-  if (task.assigneeIds.includes(auth.userId)) return;
-  // Supervising the task counts too — reportTo is who the work answers to.
-  if (task.reportToIds.includes(auth.userId)) return;
   if (await isProjectTeam(auth, task.projectIds)) return;
 
   throw ApiError.forbidden(
     "You're not on this task's project, so you can't change its status.",
   );
+}
+
+/**
+ * The edit guard, for a task the caller already holds.
+ *
+ * `assertTaskAccess` loads the task and then checks it. Callers that have
+ * already loaded it — the attachments module, which needs the row anyway — use
+ * this instead so escalating from `work` to `full` does not re-read the task
+ * and its project memberships a second time.
+ */
+export async function assertTaskEditable(
+  auth: UserAuth,
+  task: TaskRow,
+  level: "full" | "work",
+): Promise<void> {
+  await assertCanEdit(auth, task, level);
 }
 
 /**
@@ -289,6 +338,22 @@ export async function getTask(auth: UserAuth, id: string) {
   return shapeTask(await readableTask(auth, id));
 }
 
+/**
+ * A subtask's owner, when set, must be one of the parent task's assignees.
+ *
+ * The task form already limits the picker to that set, so this is defence in
+ * depth against a hand-crafted request — never the primary gate. An empty
+ * owner is always fine: a subtask need not be owned.
+ */
+function assertSubtaskOwners(lines: ChecklistLine[], assigneeIds: string[]) {
+  const allowed = new Set(assigneeIds);
+  for (const line of lines) {
+    if (line.ownerId && !allowed.has(line.ownerId)) {
+      throw ApiError.badRequest("A subtask's owner must be one of the task's assignees.");
+    }
+  }
+}
+
 /* ---------------------------------------------------------------- create -- */
 
 export async function createTask(auth: UserAuth, input: CreateTaskInput) {
@@ -298,9 +363,18 @@ export async function createTask(auth: UserAuth, input: CreateTaskInput) {
   const assigneeIds = [...new Set(input.assigneeIds)];
   await assertAssignable(auth, projectIds, assigneeIds);
 
+  const createdAt = new Date().toISOString();
   const checklist = input.checklist.map((line) =>
-    normaliseLine({ ...line, id: line.id || embeddedId("chk") }),
+    normaliseLine({
+      ...line,
+      id: line.id || embeddedId("chk"),
+      createdBy: line.createdBy ?? auth.name,
+      createdAt: line.createdAt ?? createdAt,
+      updatedBy: auth.name,
+      updatedAt: createdAt,
+    }),
   );
+  assertSubtaskOwners(checklist, assigneeIds);
 
   const task = await prisma.task.create({
     data: {
@@ -389,9 +463,20 @@ export async function updateTask(auth: UserAuth, id: string, input: UpdateTaskIn
   const assigneeIds = input.assigneeIds ? [...new Set(input.assigneeIds)] : before.assigneeIds;
   if (input.assigneeIds) await assertAssignable(auth, projectIds, assigneeIds);
 
+  const editedAt = new Date().toISOString();
   const checklist = input.checklist
-    ? input.checklist.map((line) => normaliseLine({ ...line, id: line.id || embeddedId("chk") }))
+    ? input.checklist.map((line) =>
+        normaliseLine({
+          ...line,
+          id: line.id || embeddedId("chk"),
+          createdBy: line.createdBy ?? auth.name,
+          createdAt: line.createdAt ?? editedAt,
+          updatedBy: auth.name,
+          updatedAt: editedAt,
+        }),
+      )
     : undefined;
+  if (checklist) assertSubtaskOwners(checklist, assigneeIds);
 
   const trail = input.note
     ? [
@@ -591,7 +676,7 @@ export async function submitQcReview(auth: UserAuth, taskId: string, input: QcRe
     prisma.task.update({
       where: { id: taskId },
       data: {
-        ...(sendBack ? { state: "inProgress" as TaskState, completedAt: null } : {}),
+        ...(sendBack ? { state: "working" as TaskState, completedAt: null } : {}),
         checklist,
         qcReviews: [...task.qcReviews, review],
         updates: [

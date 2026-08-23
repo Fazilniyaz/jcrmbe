@@ -27,6 +27,7 @@ Fill in `.env`:
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | Two **different** random strings, 32+ chars. `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"` |
 | `MASTER_PASSWORD_HASH` | Run `npm run hash-master` and paste the line it prints |
 | `GMAIL_APP_PASSWORD` | Your 16-character Gmail App Password (Google Account → Security → 2-Step Verification → App passwords). Leave empty and invite links are logged instead of emailed |
+| `IMAGEKIT_PUBLIC_KEY` / `IMAGEKIT_PRIVATE_KEY` / `IMAGEKIT_URL_ENDPOINT` | From ImageKit → Developer options → API keys. Fill all three and attachments live in ImageKit; leave them empty and they go to `UPLOAD_DIR` on local disk. The private key is a **secret** and never reaches the browser |
 
 The process refuses to start on a missing or malformed value rather than
 failing on the first request.
@@ -126,6 +127,9 @@ Only `auth` and `invite` are reachable without a token.
 | PATCH | `/tasks/:id/state` · `/tasks/:id/assignees` | manager or assignee |
 | PATCH | `/tasks/:id/checklist/:itemId` | manager or assignee |
 | POST | `/tasks/:id/qc-review` | QC or manager |
+| GET POST | `/tasks/:id/attachments` | read: anyone who sees the task · write: manager or assignee |
+| GET | `/tasks/:id/attachments/:attId/download` | anyone who sees the task |
+| DELETE | `/tasks/:id/attachments/:attId` | the uploader, or a manager |
 | GET PATCH | `/settings/profile` | any user |
 | POST | `/settings/password` | any user |
 | GET | `/settings/modules` | any user |
@@ -302,6 +306,47 @@ B14. The workspace reports the currency of the branch **in force**, and money is
 44. `kraApplied` guards against double-charging. Marking a task `failed`
     deducts its own `kraPoints` once, and only if QC has not already charged it.
 
+### Task attachments
+
+44a. The four board columns are `notStarted / working / stuck / done`, defined
+    once in the frontend's `TASK_STATUS_DEFS` and mapped to the Prisma enum in
+    `lib/api/adapters.ts`. `failed` remains in the enum but is **not** a column
+    and nothing in the UI can write it — it is the trigger for rule 44, and
+    wiring it to `stuck` would mean dragging a card to Stuck silently deducted
+    KRA from every assignee.
+44b. The stored name is generated server-side — 128 bits of randomness plus an
+    extension chosen from the mime allowlist, sharded by a hash of the company
+    id on disk and by `/<folder>/<companyId>/<taskId>` in ImageKit. The
+    client's filename is kept for display only and never touches a path or an
+    object name, so a name like `../../.env` has nowhere to go.
+44c. An allowlist of mime types, not a denylist. No `text/html` and no
+    `image/svg+xml`, because both carry script.
+44d. 10 MB per file, cut mid-flight by busboy and re-checked against the
+    running total while the bytes are buffered, and 25 files per task. The
+    buffer exists because the object store's upload API takes one; the ceiling
+    per request is therefore one `UPLOAD_MAX_BYTES` allocation, which is what
+    the 20/minute upload limit in 44g is sized against. A rejected upload is
+    never stored, and bytes stored under a row that then fails to insert are
+    removed, so neither leaves anything behind.
+44e. Access is checked BEFORE a byte is read. Checking afterwards would let
+    anyone with a token spend the server's disk on a task they cannot see.
+44f. Downloads are served through an authorised route — never a public path.
+    Local files stream from that route as `Content-Disposition: attachment`
+    with `X-Content-Type-Options: nosniff`; ImageKit files answer with a 302 to
+    a signed URL that expires in five minutes, carrying `ik-attachment` for
+    everything that is not an image. Either way an uploaded file can never
+    execute as script on the API's origin, and there is no permanent public
+    link to a tenant's file.
+44g. Uploads have their own rate limit (20/minute), far tighter than the
+    blanket 300/minute, because one upload costs disk and memory rather than a
+    query.
+44h. Which store holds a file is recorded on the row, not read from the current
+    configuration, so switching ImageKit on leaves every file already on disk
+    downloadable and deletable. Images are compressed in the browser before
+    upload (long edge 1600, quality 0.8) and delivered through ImageKit's
+    `f-auto,q-auto`, so a phone photo costs a few hundred KB rather than six
+    megabytes at both ends. PDFs and documents are stored and served untouched.
+
 ### Settings and module access
 
 45. Every portal's Settings can read its own profile, change its own password,
@@ -335,6 +380,8 @@ B14. The workspace reports the currency of the branch **in force**, and money is
 | `npm run prisma:push` | push the schema to Atlas |
 | `npm run seed` | one demo tenant (`--reset` to recreate) |
 | `npm run hash-master` | print an argon2 hash for `MASTER_PASSWORD_HASH` |
+| `npm run migrate:task-states` | report which tasks still carry the pre-four-column states |
+| `npm run migrate:task-states:apply` | rewrite them (dry run is the default, so this is the opt-in) |
 
 ## Security
 

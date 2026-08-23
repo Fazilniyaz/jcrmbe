@@ -1,15 +1,22 @@
 import { z } from "zod";
-import { objectId, optionalIsoDate, optionalText, text, urlField } from "../../middleware/validate";
+import {
+  objectId,
+  optionalIsoDate,
+  optionalRichText,
+  optionalText,
+  text,
+  urlField,
+} from "../../middleware/validate";
 
-export const taskStateEnum = z.enum([
-  "todo",
-  "backlog",
-  "inProgress",
-  "inReview",
-  "done",
-  "blocked",
-  "failed",
-]);
+/*
+ * The four board columns. `failed` is accepted but is not one of them.
+ *
+ * It is the trigger for the secondary KRA rule, and nothing in the UI sends it
+ * — a card moved to Stuck sends `stuck`. Keeping the two apart is what stops a
+ * status change that reads as neutral from deducting points from every
+ * assignee. See the TaskState enum in prisma/schema.prisma.
+ */
+export const taskStateEnum = z.enum(["notStarted", "working", "stuck", "done", "failed"]);
 
 export const qcVerdictEnum = z.enum(["Approved", "Corrections", "Error"]);
 export const bugSeverityEnum = z.enum(["Critical", "Major", "Minor"]);
@@ -28,19 +35,33 @@ export const checklistItemSchema = z
     score: z.number().min(0).max(1).default(0),
     points: z.number().int().min(1).max(100).default(1),
     done: z.boolean().optional(),
+    // Subtask metadata — all optional, none of it feeds the KRA maths.
+    description: optionalRichText(20000),
+    status: taskStateEnum.optional(),
+    ownerId: objectId.optional(),
+    priorityLevel: z.number().int().min(1).max(5).optional(),
+    startDate: optionalIsoDate,
+    endDate: optionalIsoDate,
+    // Audit fields round-trip so an edit does not blank the "created by" the
+    // server first stamped; the service still owns updatedBy/updatedAt.
+    createdBy: optionalText(120),
+    createdAt: optionalIsoDate,
   })
   .strict();
 
 export const createTaskSchema = z
   .object({
     title: text(200),
-    description: optionalText(8000),
+    // Rich text: the cap covers markup as well as words. Sanitised on the way
+    // in, because it is rendered as HTML in every colleague's browser — see
+    // src/lib/richText.ts.
+    description: optionalRichText(40000),
     taskCode: optionalText(32),
     /** At least one project — a task with none is unreachable. */
     projectIds: z.array(objectId).min(1, "Pick at least one project.").max(10),
     assigneeIds: z.array(objectId).max(20).default([]),
     reportToIds: z.array(objectId).max(20).default([]),
-    state: taskStateEnum.default("todo"),
+    state: taskStateEnum.default("notStarted"),
     /** 1 = do first, 5 = whenever. */
     priorityLevel: z.number().int().min(1).max(5).default(3),
     kraPoints: z.number().int().min(0).max(100).default(0),

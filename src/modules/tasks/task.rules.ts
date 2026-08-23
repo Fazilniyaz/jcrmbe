@@ -9,7 +9,24 @@ import type { Priority, TaskState } from "@prisma/client";
  * progress calculation can both use them.
  */
 
-export type ChecklistLine = { id: string; label: string; done: boolean; score: number; points: number };
+export type ChecklistLine = {
+  id: string;
+  label: string;
+  done: boolean;
+  score: number;
+  points: number;
+  // Subtask metadata — descriptive only, never touches the KRA maths above.
+  description?: string | null;
+  status?: TaskState | null;
+  ownerId?: string | null;
+  priorityLevel?: number | null;
+  startDate?: string | Date | null;
+  endDate?: string | Date | null;
+  createdBy?: string | null;
+  createdAt?: string | Date | null;
+  updatedBy?: string | null;
+  updatedAt?: string | Date | null;
+};
 
 /** 0..1. NaN reads as 0, which is what an empty input field produces. */
 export function clampScore(n: number): number {
@@ -59,6 +76,16 @@ export function normaliseLine(line: {
   done?: boolean;
   score?: number | null;
   points?: number | null;
+  description?: string | null;
+  status?: TaskState | null;
+  ownerId?: string | null;
+  priorityLevel?: number | null;
+  startDate?: string | Date | null;
+  endDate?: string | Date | null;
+  createdBy?: string | null;
+  createdAt?: string | Date | null;
+  updatedBy?: string | null;
+  updatedAt?: string | Date | null;
 }): ChecklistLine {
   const score = clampScore(Number(line.score ?? (line.done ? 1 : 0)));
   return {
@@ -67,6 +94,17 @@ export function normaliseLine(line: {
     score,
     points: itemPoints(line),
     done: score >= 1,
+    // Passed straight through — normalisation only owns score/points/done.
+    description: line.description ?? null,
+    status: line.status ?? null,
+    ownerId: line.ownerId ?? null,
+    priorityLevel: line.priorityLevel ?? null,
+    startDate: line.startDate ?? null,
+    endDate: line.endDate ?? null,
+    createdBy: line.createdBy ?? null,
+    createdAt: line.createdAt ?? null,
+    updatedBy: line.updatedBy ?? null,
+    updatedAt: line.updatedAt ?? null,
   };
 }
 

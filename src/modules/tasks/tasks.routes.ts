@@ -25,6 +25,7 @@ import {
   submitQcReview,
   updateTask,
 } from "./tasks.service";
+import { attachmentsRouter } from "../attachments/attachments.routes";
 
 export const tasksRouter = Router();
 
@@ -94,3 +95,10 @@ tasksRouter.post(
     ok(res, await submitQcReview(actor(req), params<{ id: string }>(req).id, body<QcReviewInput>(req)));
   },
 );
+
+/*
+ * Attachments hang off a task rather than standing alone, so they mount here
+ * and inherit this router's guards — requireAuth, requireUser and the Tasks
+ * module grant — instead of restating them and risking one being forgotten.
+ */
+tasksRouter.use("/:id/attachments", attachmentsRouter);

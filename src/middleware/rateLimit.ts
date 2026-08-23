@@ -41,3 +41,13 @@ export const mailLimiter = make({ windowMs: 60 * MINUTE, max: 30 });
 
 /** The blanket limit for the authenticated API. */
 export const apiLimiter = make({ windowMs: MINUTE, max: 300 });
+
+/*
+ * Uploads, counted separately and far tighter than the blanket limit.
+ *
+ * The blanket 300/minute is sized for JSON requests that cost a query. An
+ * upload costs up to UPLOAD_MAX_BYTES of disk and the bandwidth to move it, so
+ * 300 of them a minute is a way to fill the volume rather than a way to work.
+ * Twenty a minute is more than anyone attaching files to a task will notice.
+ */
+export const uploadLimiter = make({ windowMs: MINUTE, max: 20 });

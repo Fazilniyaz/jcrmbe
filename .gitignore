@@ -3,5 +3,11 @@ dist/
 .env
 .env.*
 !.env.example
+!.env.production.example
 *.log
 .DS_Store
+
+# Attachments written by the local storage driver. Real tenant files - they must
+# never reach a commit, and on a real deployment this is a mounted volume rather
+# than a directory in the checkout at all.
+var/

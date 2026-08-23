@@ -1,6 +1,7 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { z, type ZodTypeAny } from "zod";
 import { ApiError } from "../lib/errors";
+import { sanitizeRichText } from "../lib/richText";
 
 /*
  * Input validation, and the NoSQL operator-injection guard.
@@ -128,6 +129,31 @@ export const text = (max: number, min = 1) =>
 
 export const optionalText = (max: number) =>
   z.string().trim().max(max).optional().or(z.literal("")).transform((v) => (v ? v : undefined));
+
+/**
+ * An optional rich-text field: HTML in, sanitised HTML out.
+ *
+ * The cap is measured on the RAW input, before sanitising, so a request cannot
+ * spend a megabyte of parser time on markup that will be thrown away. What is
+ * stored is whatever survives `sanitizeRichText`, which is the only form of
+ * this value the database is ever allowed to hold — see src/lib/richText.ts
+ * for why that boundary is on the way in rather than on the way out.
+ *
+ * A document with formatting but no words ("<p><br></p>", what an editor leaves
+ * behind when you type and then delete) collapses to undefined, so "has a
+ * description" stays an honest question.
+ */
+export const optionalRichText = (max: number) =>
+  z
+    .string()
+    .max(max, `Must be ${max} characters or fewer, including formatting.`)
+    .optional()
+    .or(z.literal(""))
+    .transform((v) => {
+      if (!v) return undefined;
+      const clean = sanitizeRichText(v);
+      return clean || undefined;
+    });
 
 export const email = z.string().trim().toLowerCase().email("Must be a valid email address.").max(254);
 

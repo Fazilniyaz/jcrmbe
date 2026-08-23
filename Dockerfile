@@ -20,6 +20,11 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/package.json ./package.json
+# Attachment storage. Created here, owned by `node`, BEFORE the volume is
+# mounted: Docker seeds a fresh named volume from the image path including its
+# ownership, so without this the volume arrives root-owned and the unprivileged
+# process cannot write a single upload. Must match UPLOAD_DIR.
+RUN mkdir -p /data/uploads && chown -R node:node /data
 EXPOSE 4000
 USER node
 CMD ["node", "dist/index.js"]
