@@ -33,6 +33,10 @@ export const MODULE_SLUGS = [
   "notifications",
   "requests",
   "settings",
+  // Super-admin only: the roster floor. No role lists it in BY_ROLE below, so
+  // the only way in is superAdmin (who short-circuits to everything) or an
+  // explicit grant from one.
+  "playground",
 ] as const;
 
 export type ModuleSlug = (typeof MODULE_SLUGS)[number];

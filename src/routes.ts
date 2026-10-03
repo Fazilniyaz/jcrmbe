@@ -10,6 +10,7 @@ import { projectsRouter } from "./modules/projects/projects.routes";
 import { tasksRouter } from "./modules/tasks/tasks.routes";
 import { settingsRouter } from "./modules/settings/settings.routes";
 import { notificationsRouter } from "./modules/notifications/notifications.routes";
+import { playgroundRouter } from "./modules/playground/playground.routes";
 
 /*
  * The API surface, versioned at /api/v1.
@@ -34,3 +35,4 @@ router.use("/projects", projectsRouter);
 router.use("/tasks", tasksRouter);
 router.use("/settings", settingsRouter);
 router.use("/notifications", notificationsRouter);
+router.use("/playground", playgroundRouter);
