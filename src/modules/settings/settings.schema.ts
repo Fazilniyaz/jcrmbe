@@ -38,9 +38,17 @@ export const changePasswordSchema = z
  * rejected rather than stored, so `moduleAccess` can never accumulate values
  * that mean nothing to the guard.
  */
+const MODULE_GRANT = new RegExp(`^(${MODULE_SLUGS.join("|")})(:(view|edit))?$`);
+
 export const setModuleAccessSchema = z
   .object({
-    modules: z.array(z.enum(MODULE_SLUGS)).max(MODULE_SLUGS.length),
+    /*
+     * Each entry is `"<slug>"` or `"<slug>:<view|edit>"`. The bare form predates
+     * access levels and still means `edit`, so an older client keeps working.
+     */
+    modules: z
+      .array(z.string().regex(MODULE_GRANT, "Unknown module or access level."))
+      .max(MODULE_SLUGS.length),
   })
   .strict();
 

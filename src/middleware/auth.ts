@@ -3,7 +3,13 @@ import type { EmpType, Role } from "@prisma/client";
 import { ApiError } from "../lib/errors";
 import { verifyAccessToken } from "../lib/jwt";
 import { prisma } from "../lib/prisma";
-import { canOpenModule, effectiveModules, type ModuleSlug } from "../lib/modules";
+import {
+  effectiveModules,
+  moduleLevels,
+  type AccessLevel,
+  type ModuleLevels,
+  type ModuleSlug,
+} from "../lib/modules";
 
 /*
  * Who is calling, and what they are allowed to touch.
@@ -37,6 +43,8 @@ export type UserAuth = {
   moduleAccess: string[];
   /** Roles + grants, resolved. */
   modules: ModuleSlug[];
+  /** The same set, carrying the level each one was granted at. */
+  levels: ModuleLevels;
 };
 
 export type AuthContext = MasterAuth | UserAuth;
@@ -106,6 +114,7 @@ export const requireAuth: RequestHandler = async (req, _res, next) => {
       isOwner: user.isOwner,
       moduleAccess: user.moduleAccess,
       modules: effectiveModules(user.roles, user.moduleAccess),
+      levels: moduleLevels(user.roles, user.moduleAccess),
     };
     next();
   } catch (err) {
@@ -140,8 +149,21 @@ export function requireRole(...roles: Role[]): RequestHandler {
   };
 }
 
-/** Role defaults ∪ per-user grants, checked against the module registry. */
-export function requireModule(slug: ModuleSlug): RequestHandler {
+/**
+ * The methods that only read. Everything else changes something and therefore
+ * needs `edit` on the module.
+ */
+const READ_ONLY_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * Role defaults ∪ per-user grants, checked against the module registry.
+ *
+ * The LEVEL is enforced from the request method rather than named per route:
+ * a safe method needs `view`, anything that writes needs `edit`. Doing it here
+ * means every existing route — and every route added inside one of these
+ * routers later — is covered without having to remember a second guard.
+ */
+export function requireModule(slug: ModuleSlug, minimum?: AccessLevel): RequestHandler {
   return (req, _res, next) => {
     const auth = req.auth;
     if (!auth) return next(ApiError.unauthorized());
@@ -150,8 +172,15 @@ export function requireModule(slug: ModuleSlug): RequestHandler {
       if (slug === "dashboard" || slug === "companies" || slug === "settings") return next();
       return next(ApiError.forbidden("Not available on the master portal."));
     }
-    if (!canOpenModule(auth.roles, auth.moduleAccess, slug)) {
+
+    const level = auth.levels[slug];
+    if (!level) {
       return next(ApiError.forbidden("That module isn't enabled for your account."));
+    }
+
+    const needed: AccessLevel = minimum ?? (READ_ONLY_METHODS.has(req.method) ? "view" : "edit");
+    if (needed === "edit" && level !== "edit") {
+      return next(ApiError.forbidden("You have view-only access to that module."));
     }
     next();
   };

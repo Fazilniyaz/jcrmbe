@@ -154,19 +154,82 @@ export function defaultModulesForRole(roles: readonly Role[]): ModuleSlug[] {
   return MODULE_SLUGS.filter((s) => out.has(s));
 }
 
+/* ------------------------------------------------------- access levels -- */
+
 /**
- * Everything a user may open: role defaults plus the super admin's extra grants.
- * Unknown or stale entries in `moduleAccess` are ignored rather than trusted.
+ * How much of a module someone gets.
+ *
+ *   view  they may read it. Every mutating request is refused.
+ *   edit  the full module, as before.
+ *
+ * `edit` is the default everywhere, so nothing that worked before this existed
+ * changes: a role default is `edit`, and a bare grant string is `edit`.
+ */
+export const ACCESS_LEVELS = ["view", "edit"] as const;
+export type AccessLevel = (typeof ACCESS_LEVELS)[number];
+
+/** What a user may open, and at what level. Absent = no access. */
+export type ModuleLevels = Partial<Record<ModuleSlug, AccessLevel>>;
+
+/**
+ * One stored grant.
+ *
+ * Written as `"<slug>"` or `"<slug>:<level>"`. The bare form predates levels
+ * and still means `edit`, so existing rows keep working untouched.
+ */
+export function parseGrant(raw: string): { slug: ModuleSlug; level: AccessLevel } | null {
+  const [slugPart, levelPart] = raw.split(":");
+  const slug = resolveModuleSlug((slugPart ?? "").trim());
+  if (!slug) return null;
+  return { slug, level: levelPart === "view" ? "view" : "edit" };
+}
+
+export function formatGrant(slug: ModuleSlug, level: AccessLevel): string {
+  return `${slug}:${level}`;
+}
+
+/**
+ * Everything a user may open, resolved to a level.
+ *
+ * Role defaults come in at `edit`; an explicit grant then OVERRIDES that,
+ * which is what lets a super admin reduce a role's own module to view-only.
+ * Unknown or stale entries are ignored rather than trusted.
+ */
+export function moduleLevels(
+  roles: readonly Role[],
+  moduleAccess: readonly string[],
+): ModuleLevels {
+  const out: ModuleLevels = {};
+
+  if (roles.includes("superAdmin")) {
+    for (const slug of ALL) out[slug] = "edit";
+    return out;
+  }
+
+  for (const slug of defaultModulesForRole(roles)) out[slug] = "edit";
+  for (const raw of moduleAccess) {
+    const grant = parseGrant(raw);
+    if (grant) out[grant.slug] = grant.level;
+  }
+  return out;
+}
+
+/** The level for one module, or null when they cannot open it at all. */
+export function levelFor(
+  roles: readonly Role[],
+  moduleAccess: readonly string[],
+  slug: ModuleSlug,
+): AccessLevel | null {
+  return moduleLevels(roles, moduleAccess)[slug] ?? null;
+}
+
+/**
+ * Everything a user may open. View-only modules are included — they are still
+ * on the menu, they just refuse writes.
  */
 export function effectiveModules(roles: readonly Role[], moduleAccess: readonly string[]): ModuleSlug[] {
-  if (roles.includes("superAdmin")) return [...ALL];
-
-  const allowed = new Set<ModuleSlug>(defaultModulesForRole(roles));
-  for (const raw of moduleAccess) {
-    const slug = resolveModuleSlug(raw);
-    if (slug) allowed.add(slug);
-  }
-  return MODULE_SLUGS.filter((s) => allowed.has(s));
+  const levels = moduleLevels(roles, moduleAccess);
+  return MODULE_SLUGS.filter((s) => levels[s] !== undefined);
 }
 
 export function canOpenModule(
@@ -174,6 +237,5 @@ export function canOpenModule(
   moduleAccess: readonly string[],
   slug: ModuleSlug,
 ): boolean {
-  if (roles.includes("superAdmin")) return true;
-  return effectiveModules(roles, moduleAccess).includes(slug);
+  return moduleLevels(roles, moduleAccess)[slug] !== undefined;
 }

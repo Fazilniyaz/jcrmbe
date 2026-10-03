@@ -6,6 +6,10 @@ import {
   MODULE_SLUGS,
   defaultModulesForRole,
   effectiveModules,
+  formatGrant,
+  moduleLevels,
+  parseGrant,
+  type AccessLevel,
   type ModuleSlug,
 } from "../../lib/modules";
 import { isSuperAdmin, type UserAuth } from "../../middleware/auth";
@@ -153,6 +157,9 @@ export async function listModuleAccess(auth: UserAuth) {
       defaults: defaultModulesForRole(user.roles),
       granted: user.moduleAccess,
       effective: effectiveModules(user.roles, user.moduleAccess),
+      // slug -> "view" | "edit", so the editor can render the real tri-state
+      // (off / view / edit) rather than inferring it from two flat lists.
+      levels: moduleLevels(user.roles, user.moduleAccess),
       // A superAdmin's grid row is read-only: they already have everything and
       // reducing it would be a way to lock the owner out of their own company.
       locked: user.roles.includes("superAdmin") || user.isOwner,
@@ -180,9 +187,24 @@ export async function setModuleAccess(auth: UserAuth, userId: string, input: Set
   }
 
   const defaults = new Set<ModuleSlug>(defaultModulesForRole(target.roles));
-  // Anything already covered by the role is dropped: storing it would be a
-  // grant that silently survives a demotion.
-  const extras = [...new Set(input.modules)].filter((slug) => !defaults.has(slug));
+
+  /*
+   * Normalise to one entry per module, written as `slug:level`.
+   *
+   * A redundant grant is dropped — `edit` on a module the ROLE already gives at
+   * `edit` would be a grant that silently survives a demotion. A `view` entry on
+   * a role default is NOT redundant: it is a restriction, and dropping it would
+   * quietly hand the module back at full access.
+   */
+  const byModule = new Map<ModuleSlug, AccessLevel>();
+  for (const raw of input.modules) {
+    const grant = parseGrant(raw);
+    if (grant) byModule.set(grant.slug, grant.level);
+  }
+
+  const extras = [...byModule.entries()]
+    .filter(([slug, level]) => !(defaults.has(slug) && level === "edit"))
+    .map(([slug, level]) => formatGrant(slug, level));
 
   const updated = await prisma.user.update({
     where: { id: userId },
@@ -197,6 +219,7 @@ export async function setModuleAccess(auth: UserAuth, userId: string, input: Set
     defaults: defaultModulesForRole(updated.roles),
     granted: updated.moduleAccess,
     effective: effectiveModules(updated.roles, updated.moduleAccess),
+    levels: moduleLevels(updated.roles, updated.moduleAccess),
   };
 }
 

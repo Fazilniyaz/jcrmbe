@@ -13,7 +13,7 @@ import {
   signRefreshToken,
   verifyRefreshToken,
 } from "../../lib/jwt";
-import { effectiveModules } from "../../lib/modules";
+import { effectiveModules, moduleLevels } from "../../lib/modules";
 
 /*
  * Sign-in, session rotation and sign-out.
@@ -114,6 +114,9 @@ export function publicUser(user: AuthUser) {
     phone: user.phone,
     tone: user.tone,
     modules: effectiveModules(user.roles, user.moduleAccess),
+    // The same set with the level each was granted at, so the UI can show a
+    // module read-only instead of offering edits the API will refuse.
+    moduleLevels: moduleLevels(user.roles, user.moduleAccess),
     moduleAccess: user.moduleAccess,
   };
 }
