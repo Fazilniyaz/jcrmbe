@@ -5,6 +5,7 @@ import { prisma } from "../../lib/prisma";
 import { embeddedId, nextProjectCode } from "../../lib/codes";
 import { isLead, isSuperAdmin, type UserAuth } from "../../middleware/auth";
 import { notify } from "../notifications/notifications.service";
+import { membersOfTeams } from "../teams/teams.service";
 import { taskScore } from "../tasks/task.rules";
 import type {
   CreateProjectInput,
@@ -48,6 +49,8 @@ const PROJECT_SELECT = {
   startDate: true,
   dueDate: true,
   plan: true,
+  teamIds: true,
+  requireAcceptance: true,
   createdById: true,
   createdAt: true,
   updatedAt: true,
@@ -307,6 +310,27 @@ function shapeProject(
  * reconciliation `inviteMembers` does applies. This validates everyone in one
  * query and writes every membership in one `createMany`.
  */
+/**
+ * Does putting someone on this project need their acceptance?
+ *
+ * The project's own setting wins when it has one; otherwise the workspace
+ * default; otherwise true. True is the fallback at every step on purpose —
+ * placing people on work without asking is the surprising behaviour, so it
+ * only happens when somebody has explicitly turned acceptance off.
+ */
+export async function acceptanceRequired(
+  companyId: string,
+  projectOverride?: boolean | null,
+): Promise<boolean> {
+  if (typeof projectOverride === "boolean") return projectOverride;
+
+  const company = await prisma.company.findUnique({
+    where: { id: companyId },
+    select: { settings: true },
+  });
+  return company?.settings?.requireProjectAcceptance ?? true;
+}
+
 export async function createProject(auth: UserAuth, input: CreateProjectInput) {
   if (!isLead(auth)) throw ApiError.forbidden("Only an admin or a manager can create a project.");
 
@@ -316,6 +340,12 @@ export async function createProject(auth: UserAuth, input: CreateProjectInput) {
   if (input.managerIds.length > 0 && !isSuperAdmin(auth)) {
     throw ApiError.forbidden("Only a super admin can assign a project manager.");
   }
+  if (input.requireAcceptance !== undefined && input.requireAcceptance !== null && !isSuperAdmin(auth)) {
+    throw ApiError.forbidden("Only a super admin can change the acceptance rule for a project.");
+  }
+  if (input.teamIds.length > 0 && !isSuperAdmin(auth)) {
+    throw ApiError.forbidden("Only a super admin can put a team on a project at create time.");
+  }
 
   /*
    * The creator holds their own manager seat, so they are dropped from
@@ -324,7 +354,16 @@ export async function createProject(auth: UserAuth, input: CreateProjectInput) {
    * batch.
    */
   const managerIds = [...new Set(input.managerIds)].filter((id) => id !== auth.userId);
-  const memberIds = [...new Set(input.memberIds)].filter(
+
+  /*
+   * A team is shorthand for its people. It is expanded here, at the moment of
+   * assignment, and then forgotten about — everything downstream reads the
+   * ProjectMember rows, so a team never becomes a second answer to "who is on
+   * this project". Anyone named individually AND by a team is placed once.
+   */
+  const teamIds = [...new Set(input.teamIds)];
+  const fromTeams = await membersOfTeams(auth.companyId, teamIds);
+  const memberIds = [...new Set([...input.memberIds, ...fromTeams])].filter(
     (id) => id !== auth.userId && !managerIds.includes(id),
   );
 
@@ -355,11 +394,17 @@ export async function createProject(auth: UserAuth, input: CreateProjectInput) {
       progress: 0,
       plan: [],
       secrets: [],
+      teamIds,
+      requireAcceptance: input.requireAcceptance ?? null,
     },
     select: PROJECT_SELECT,
   });
 
   const now = new Date();
+  // Resolved once for the whole batch, so every person added in this call is
+  // treated the same way.
+  const needsAccept = await acceptanceRequired(auth.companyId, input.requireAcceptance);
+  const joinState = needsAccept ? ("invited" as const) : ("accepted" as const);
   await prisma.projectMember.createMany({
     data: [
       // The creator is a manager on it already — and already accepted, since
@@ -377,22 +422,30 @@ export async function createProject(auth: UserAuth, input: CreateProjectInput) {
         projectId: project.id,
         userId,
         role: "manager" as MemberRole,
-        state: "invited" as const,
+        state: joinState,
         invitedById: auth.userId,
         invitedAt: now,
+        // An accepted-on-creation membership has been responded to by policy,
+        // not by the person, but it is still a settled state and the column
+        // means "when did this stop being open".
+        ...(needsAccept ? {} : { respondedAt: now }),
       })),
       ...memberIds.map((userId) => ({
         projectId: project.id,
         userId,
         role: "member" as MemberRole,
-        state: "invited" as const,
+        state: joinState,
         invitedById: auth.userId,
         invitedAt: now,
+        ...(needsAccept ? {} : { respondedAt: now }),
       })),
     ],
   });
 
-  const label = `${project.code ? `${project.code} — ` : ""}${project.name}. Accept it to get involved.`;
+  const name = `${project.code ? `${project.code} — ` : ""}${project.name}`;
+  // Telling someone to "accept it" when they were placed on it outright is the
+  // kind of small lie that makes people stop reading notifications.
+  const label = needsAccept ? `${name}. Accept it to get involved.` : `${name}. You are on it now.`;
 
   // Both notification batches and the membership read-back are independent of
   // each other, so they overlap instead of queueing.
@@ -400,15 +453,17 @@ export async function createProject(auth: UserAuth, input: CreateProjectInput) {
     prisma.projectMember.findMany({ where: { projectId: project.id }, select: MEMBER_SELECT }),
     managerIds.length > 0
       ? notify(auth.companyId, managerIds, {
-          kind: "project-lead-invited",
-          title: `${auth.name} asked you to lead a project`,
+          kind: needsAccept ? "project-lead-invited" : "project-lead-assigned",
+          title: needsAccept
+            ? `${auth.name} asked you to lead a project`
+            : `${auth.name} made you the lead on a project`,
           detail: label,
           projectId: project.id,
         })
       : Promise.resolve(),
     memberIds.length > 0
       ? notify(auth.companyId, memberIds, {
-          kind: "project-invited",
+          kind: needsAccept ? "project-invited" : "project-assigned",
           title: `${auth.name} added you to a project`,
           detail: label,
           projectId: project.id,
@@ -582,6 +637,10 @@ export async function inviteMembers(
   assertInviteesAllowed(users, userIds, role);
 
   const now = new Date();
+  // Same policy as createProject, re-resolved here because the project's own
+  // override may have changed since it was created.
+  const needsAccept = await acceptanceRequired(auth.companyId, project.requireAcceptance);
+  const joinState = needsAccept ? ("invited" as const) : ("accepted" as const);
   const results = await Promise.all(
     users.map(async (user) => {
       const existing = await prisma.projectMember.findUnique({
@@ -595,7 +654,13 @@ export async function inviteMembers(
         if (existing.state === "declined") {
           return prisma.projectMember.update({
             where: { id: existing.id },
-            data: { state: "invited", role, invitedById: auth.userId, invitedAt: now, respondedAt: null },
+            data: {
+              state: joinState,
+              role,
+              invitedById: auth.userId,
+              invitedAt: now,
+              respondedAt: needsAccept ? null : now,
+            },
             select: MEMBER_SELECT,
           });
         }
@@ -606,22 +671,39 @@ export async function inviteMembers(
       }
 
       return prisma.projectMember.create({
-        data: { projectId, userId: user.id, role, state: "invited", invitedById: auth.userId },
+        data: {
+          projectId,
+          userId: user.id,
+          role,
+          state: joinState,
+          invitedById: auth.userId,
+          ...(needsAccept ? {} : { respondedAt: now }),
+        },
         select: MEMBER_SELECT,
       });
     }),
   );
 
+  const name = `${project.code ? `${project.code} — ` : ""}${project.name}`;
   await notify(
     auth.companyId,
-    results.filter((r) => r.state === "invited").map((r) => r.userId),
+    results.filter((r) => r.state === joinState).map((r) => r.userId),
     {
-      kind: role === "manager" ? "project-lead-invited" : "project-invited",
+      kind:
+        role === "manager"
+          ? needsAccept
+            ? "project-lead-invited"
+            : "project-lead-assigned"
+          : needsAccept
+            ? "project-invited"
+            : "project-assigned",
       title:
         role === "manager"
-          ? `${auth.name} asked you to lead a project`
+          ? needsAccept
+            ? `${auth.name} asked you to lead a project`
+            : `${auth.name} made you the lead on a project`
           : `${auth.name} added you to a project`,
-      detail: `${project.code ? `${project.code} — ` : ""}${project.name}. Accept it to get involved.`,
+      detail: needsAccept ? `${name}. Accept it to get involved.` : `${name}. You are on it now.`,
       projectId,
     },
   );

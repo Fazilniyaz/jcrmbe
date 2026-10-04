@@ -60,6 +60,11 @@ export const createTaskSchema = z
     /** At least one project — a task with none is unreachable. */
     projectIds: z.array(objectId).min(1, "Pick at least one project.").max(10),
     assigneeIds: z.array(objectId).max(20).default([]),
+    /**
+     * Teams on this task. Expanded into `assigneeIds` at assignment time and
+     * kept only as a reference — see the Team model.
+     */
+    teamIds: z.array(objectId).max(20).default([]),
     reportToIds: z.array(objectId).max(20).default([]),
     state: taskStateEnum.default("notStarted"),
     /** 1 = do first, 5 = whenever. */

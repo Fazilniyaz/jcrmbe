@@ -33,6 +33,7 @@ export const MODULE_SLUGS = [
   "notifications",
   "requests",
   "settings",
+  "teams",
   // Super-admin only: the roster floor. No role lists it in BY_ROLE below, so
   // the only way in is superAdmin (who short-circuits to everything) or an
   // explicit grant from one.
@@ -83,6 +84,7 @@ const BY_ROLE: Record<Role, readonly ModuleSlug[]> = {
   manager: [
     "dashboard",
     "monitor",
+    "teams",
     "projects",
     "tasks",
     "checklist",
@@ -97,6 +99,7 @@ const BY_ROLE: Record<Role, readonly ModuleSlug[]> = {
   teamLeader: [
     "dashboard",
     "monitor",
+    "teams",
     "projects",
     "tasks",
     "checklist",

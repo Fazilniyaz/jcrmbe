@@ -18,7 +18,9 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/* ----------------------------------------------------------------- enums -- */
+/**
+ * ----------------------------------------------------------------- enums --
+ */
 
 enum Role {
   developer
@@ -80,14 +82,12 @@ enum MemberState {
   declined
 }
 
-/*
+/**
  * The four board columns, plus one state the product does not offer.
- *
  * Replaced todo/backlog/inProgress/inReview/done/blocked. The old values are
  * rewritten by scripts/migrate-task-states.ts — Prisma throws when it reads a
  * value that is not in this enum, so a row left behind takes the whole Tasks
  * module down rather than showing up in the wrong column.
- *
  * `failed` is NOT a column and nothing in the UI can produce it. It is the
  * trigger for the spec's secondary KRA rule (README rule 44) and is kept
  * deliberately separate from `stuck`: dragging a card to Stuck says the work is
@@ -135,7 +135,9 @@ enum BugSeverity {
   Minor
 }
 
-/* ------------------------------------------------------ composite types -- */
+/**
+ * ------------------------------------------------------ composite types --
+ */
 
 type ChecklistItem {
   id    String
@@ -216,26 +218,38 @@ type QcReview {
   verdict        QcVerdict
   note           String?
   failedItemIds  String[]
-  pointsDeducted Int       @default(0)
+  pointsDeducted Int          @default(0)
   affected       QcAffected[]
 }
 
 // FRONTEND-PARITY: TaskOrigin — a defect raised in Proposed Bugs becomes a task.
 type TaskOrigin {
-  kind        String // "qc-bug"
-  severity    BugSeverity
-  raisedBy    String
+  kind           String // "qc-bug"
+  severity       BugSeverity
+  raisedBy       String
   raisedByUserId String?
-  foundIn     String?
+  foundIn        String?
 }
 
 // FRONTEND-PARITY: WorkspaceSettings — per-company workspace preferences.
 type WorkspaceSettings {
   autoEmployeeId Boolean @default(true)
   defaultBranch  String?
+
+  /**
+   * Does putting someone on a project need their say-so?
+   * True (the default, and the behaviour that predates this field) means a new
+   * ProjectMember starts `invited` and the person accepts it in Requests.
+   * False means they are placed on the project immediately as `accepted` and
+   * simply told about it. A project can override this for itself — see
+   * Project.requireAcceptance.
+   */
+  requireProjectAcceptance Boolean @default(true)
 }
 
-/* ---------------------------------------------------------------- models -- */
+/**
+ * ---------------------------------------------------------------- models --
+ */
 
 model Company {
   id              String      @id @default(auto()) @map("_id") @db.ObjectId
@@ -259,6 +273,7 @@ model Company {
   settings      WorkspaceSettings?
   notifications Notification[]
   clients       Client[]
+  teams         Team[]
 }
 
 model Branch {
@@ -285,43 +300,43 @@ model Branch {
 }
 
 model User {
-  id              String        @id @default(auto()) @map("_id") @db.ObjectId
-  companyId       String        @db.ObjectId
-  company         Company       @relation(fields: [companyId], references: [id])
+  id              String          @id @default(auto()) @map("_id") @db.ObjectId
+  companyId       String          @db.ObjectId
+  company         Company         @relation(fields: [companyId], references: [id])
   name            String
   email           String
-  empId           String        @unique // auto-generated, editable
+  empId           String          @unique // auto-generated, editable
   passwordHash    String?
   roles           Role[]
-  empType         EmpType       @default(employee)
-  empStatus       EmpStatus     @default(fullTime)
-  currentStatus   CurrentStatus @default(idle)
-  branchId        String?       @db.ObjectId
-  branch          Branch?       @relation(fields: [branchId], references: [id])
-  kra             Int           @default(100)
-  openWork        Int           @default(0)
-  isOwner         Boolean       @default(false)
-  state           EntityState   @default(invited)
+  empType         EmpType         @default(employee)
+  empStatus       EmpStatus       @default(fullTime)
+  currentStatus   CurrentStatus   @default(idle)
+  branchId        String?         @db.ObjectId
+  branch          Branch?         @relation(fields: [branchId], references: [id])
+  kra             Int             @default(100)
+  openWork        Int             @default(0)
+  isOwner         Boolean         @default(false)
+  state           EntityState     @default(invited)
   moduleAccess    String[]
-  reportsToId     String?       @db.ObjectId
-  reportsTo       User?         @relation("Reports", fields: [reportsToId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  reports         User[]        @relation("Reports")
+  reportsToId     String?         @db.ObjectId
+  reportsTo       User?           @relation("Reports", fields: [reportsToId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reports         User[]          @relation("Reports")
   inviteTokenHash String?
   inviteExpiresAt DateTime?
   resetTokenHash  String?
   resetExpiresAt  DateTime?
   memberships     ProjectMember[]
-  createdProjects Project[]     @relation("ProjectCreatedBy")
-  assignedTasks   Task[]        @relation("TaskAssignee")
-  createdTasks    Task[]        @relation("TaskCreatedBy")
+  createdProjects Project[]       @relation("ProjectCreatedBy")
+  assignedTasks   Task[]          @relation("TaskAssignee")
+  createdTasks    Task[]          @relation("TaskCreatedBy")
   kraEvents       KraEvent[]
   refreshTokens   RefreshToken[]
-  joinedAt        DateTime      @default(now()) // = createdAt
-  updatedAt       DateTime      @updatedAt
+  joinedAt        DateTime        @default(now()) // = createdAt
+  updatedAt       DateTime        @updatedAt
 
   // FRONTEND-PARITY: Employee.phone / Employee.tone (avatar colour).
-  phone String?
-  tone  String @default("blue")
+  phone            String?
+  tone             String    @default("blue")
   // Login throttling — a per-account lockout that survives a restart, because
   // the API is stateless and must not keep counters in instance memory.
   failedLoginCount Int       @default(0)
@@ -363,6 +378,23 @@ model Project {
   plan             Milestone[]
   secrets          SecretEntry[]
 
+  /**
+   * Teams assigned to this project.
+   * A reference, kept for display and traceability. It is NOT the membership:
+   * assigning a team expands its people into ProjectMember rows, so every
+   * downstream rule (acceptance, who may be given a task, who sees it) keeps
+   * working off the one list it always has. Removing a team later therefore
+   * does not silently remove the people it brought.
+   */
+  teamIds String[] @db.ObjectId
+
+  /**
+   * Overrides WorkspaceSettings.requireProjectAcceptance for this project.
+   * Null means "follow the workspace default", which is why it is nullable
+   * rather than a plain boolean with a default.
+   */
+  requireAcceptance Boolean?
+
   @@index([companyId])
 }
 
@@ -383,38 +415,43 @@ model ProjectMember {
 }
 
 model Task {
-  id          String    @id @default(auto()) @map("_id") @db.ObjectId
-  companyId   String    @db.ObjectId
-  company     Company   @relation(fields: [companyId], references: [id])
-  projectId   String    @db.ObjectId
-  project     Project   @relation(fields: [projectId], references: [id])
+  id          String          @id @default(auto()) @map("_id") @db.ObjectId
+  companyId   String          @db.ObjectId
+  company     Company         @relation(fields: [companyId], references: [id])
+  projectId   String          @db.ObjectId
+  project     Project         @relation(fields: [projectId], references: [id])
   title       String
   description String?
-  assigneeId  String?   @db.ObjectId
-  assignee    User?     @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  createdById String    @db.ObjectId
-  createdBy   User      @relation("TaskCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  state       TaskState @default(notStarted)
-  priority    Priority  @default(medium)
-  kraPoints   Int       @default(0) // points at stake
-  kraApplied  Boolean   @default(false) // guard against double-deduction
+  assigneeId  String?         @db.ObjectId
+  assignee    User?           @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdById String          @db.ObjectId
+  createdBy   User            @relation("TaskCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  state       TaskState       @default(notStarted)
+  priority    Priority        @default(medium)
+  kraPoints   Int             @default(0) // points at stake
+  kraApplied  Boolean         @default(false) // guard against double-deduction
   checklist   ChecklistItem[]
   dueDate     DateTime?
   completedAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   // FRONTEND-PARITY. A frontend task serves several projects and several
   // assignees, so the canonical single-valued `projectId` / `assigneeId` are
   // kept as the PRIMARY of each list and the full lists live alongside.
   // The service keeps projectId === projectIds[0] and assigneeId === assigneeIds[0].
-  projectIds  String[] @db.ObjectId
-  assigneeIds String[] @db.ObjectId
-  reportToIds String[] @db.ObjectId
-  taskCode    String? // human-facing "TSK-001"
+  projectIds    String[]          @db.ObjectId
+  assigneeIds   String[]          @db.ObjectId
+  reportToIds   String[]          @db.ObjectId
+  /**
+   * Teams assigned to this task. As on Project: a reference for display, with
+   * the people expanded into `assigneeIds` so the task rules are unchanged.
+   */
+  teamIds       String[]          @db.ObjectId
+  taskCode      String? // human-facing "TSK-001"
   // 1..5, the frontend's P1–P5. `priority` above stays the canonical field and
   // is derived from this: 1 urgent, 2 high, 3 medium, 4-5 low.
-  priorityLevel Int             @default(3)
+  priorityLevel Int               @default(3)
   startDate     DateTime?
   endDate       DateTime?
   prUrl         String?
@@ -431,14 +468,12 @@ model Task {
 
 /**
  * A file attached to a task.
- *
  * The bytes are NOT here — only a pointer to them. `provider` names the driver
  * holding them and `storageKey` is that driver's handle — a path key on disk, a
  * fileId in ImageKit. Both are generated by the server (random, no extension
  * taken from the request) and are the only name the filesystem or bucket ever
  * sees; `fileName` is what the uploader called it, stored purely so the
  * download can be given a sensible name and never used to build a path.
- *
  * `companyId` is denormalised off the task on purpose. Every read filters on it
  * first, so a mis-typed task id can never reach across tenants even if the task
  * lookup were somehow skipped.
@@ -565,5 +600,43 @@ model Notification {
   createdAt DateTime @default(now())
 
   @@index([toUserId, read])
+  @@index([companyId])
+}
+
+/**
+ * A named set of people.
+ * Teams exist so "the platform squad" can be put on a project or a task in one
+ * action instead of ticking eight names. They are a CONVENIENCE OVER
+ * MEMBERSHIP, not a replacement for it: assigning a team expands its people
+ * into ProjectMember rows / Task.assigneeIds at the moment of assignment, and
+ * everything downstream keeps reading those. Two consequences worth knowing:
+ * - Adding someone to a team does not retro-add them to projects the team is
+ * already on. That would silently grant access to work nobody reviewed.
+ * - Removing a team from a project does not remove the people it brought.
+ * They were individually placed, and may since have been given tasks.
+ * `memberIds` is a plain id list rather than a join model: a team is small,
+ * always read whole, and has no per-membership state to carry.
+ */
+model Team {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  companyId   String   @db.ObjectId
+  company     Company  @relation(fields: [companyId], references: [id])
+  name        String
+  description String?
+  /**
+   * Avatar colour, same vocabulary as User.tone.
+   */
+  tone        String   @default("blue")
+  /**
+   * Optional lead. Must be one of `memberIds`; enforced in the service.
+   */
+  leadId      String?  @db.ObjectId
+  memberIds   String[] @db.ObjectId
+  createdById String   @db.ObjectId
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // One name per company, so "Platform" is unambiguous in a picker.
+  @@unique([companyId, name])
   @@index([companyId])
 }

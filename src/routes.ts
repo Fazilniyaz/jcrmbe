@@ -11,6 +11,7 @@ import { tasksRouter } from "./modules/tasks/tasks.routes";
 import { settingsRouter } from "./modules/settings/settings.routes";
 import { notificationsRouter } from "./modules/notifications/notifications.routes";
 import { playgroundRouter } from "./modules/playground/playground.routes";
+import { teamsRouter } from "./modules/teams/teams.routes";
 
 /*
  * The API surface, versioned at /api/v1.
@@ -36,3 +37,4 @@ router.use("/tasks", tasksRouter);
 router.use("/settings", settingsRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/playground", playgroundRouter);
+router.use("/teams", teamsRouter);

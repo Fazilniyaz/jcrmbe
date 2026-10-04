@@ -5,6 +5,7 @@ import { prisma } from "../../lib/prisma";
 import { embeddedId, nextTaskCode } from "../../lib/codes";
 import { isLead, isSuperAdmin, type UserAuth } from "../../middleware/auth";
 import { notify } from "../notifications/notifications.service";
+import { membersOfTeams } from "../teams/teams.service";
 import {
   clampKra,
   clampScore,
@@ -49,6 +50,7 @@ const TASK_SELECT = {
   taskCode: true,
   assigneeId: true,
   assigneeIds: true,
+  teamIds: true,
   reportToIds: true,
   createdById: true,
   state: true,
@@ -360,7 +362,15 @@ export async function createTask(auth: UserAuth, input: CreateTaskInput) {
   const projectIds = [...new Set(input.projectIds)];
   await assertProjectsWritable(auth, projectIds);
 
-  const assigneeIds = [...new Set(input.assigneeIds)];
+  /*
+   * A team on a task is shorthand for its people: expanded here and then held
+   * only as a reference, so `assigneeIds` stays the single answer to "who is
+   * doing this". Everyone is still checked against assertAssignable below —
+   * arriving via a team is not a way around being on the project.
+   */
+  const teamIds = [...new Set(input.teamIds)];
+  const fromTeams = await membersOfTeams(auth.companyId, teamIds);
+  const assigneeIds = [...new Set([...input.assigneeIds, ...fromTeams])];
   await assertAssignable(auth, projectIds, assigneeIds);
 
   const createdAt = new Date().toISOString();
@@ -386,6 +396,7 @@ export async function createTask(auth: UserAuth, input: CreateTaskInput) {
       taskCode: input.taskCode ?? (await nextCodeForCompany(auth.companyId)),
       assigneeId: assigneeIds[0] ?? null,
       assigneeIds,
+      teamIds,
       reportToIds: [...new Set(input.reportToIds)],
       createdById: auth.userId,
       state: input.state,

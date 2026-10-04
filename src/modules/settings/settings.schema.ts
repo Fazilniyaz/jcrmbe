@@ -56,6 +56,8 @@ export const workspaceSchema = z
   .object({
     autoEmployeeId: z.boolean().optional(),
     defaultBranch: optionalText(120).nullable(),
+    /** Org-wide default for whether joining a project needs acceptance. */
+    requireProjectAcceptance: z.boolean().optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, "Nothing to update.");

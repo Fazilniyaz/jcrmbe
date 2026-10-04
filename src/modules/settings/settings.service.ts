@@ -245,6 +245,9 @@ export async function getWorkspace(auth: UserAuth) {
     company: { id: company.id, name: company.companyName, headBranch: company.headBranch },
     settings: {
       autoEmployeeId: company.settings?.autoEmployeeId ?? true,
+      // True unless somebody turned it off: people are asked before being put
+      // on work, until a super admin decides otherwise.
+      requireProjectAcceptance: company.settings?.requireProjectAcceptance ?? true,
       // The EFFECTIVE branch, not the raw column. A stored null means "nobody
       // has chosen", which resolves to the head office — so every consumer sees
       // the branch that is actually in force rather than having to re-derive it.
@@ -271,6 +274,8 @@ export async function updateWorkspace(auth: UserAuth, input: WorkspaceInput) {
 
   const settings = {
     autoEmployeeId: input.autoEmployeeId ?? current?.settings?.autoEmployeeId ?? true,
+    requireProjectAcceptance:
+      input.requireProjectAcceptance ?? current?.settings?.requireProjectAcceptance ?? true,
     defaultBranch:
       input.defaultBranch !== undefined
         ? (input.defaultBranch || null)

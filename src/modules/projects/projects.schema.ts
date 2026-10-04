@@ -44,6 +44,19 @@ export const createProjectSchema = z
      * for a manager the flow is: accept the project first, then add people.
      */
     memberIds: idList(50),
+    /**
+     * Teams put on the project. Their people are expanded into memberships at
+     * create time and the ids are kept for display — see the Team model.
+     */
+    teamIds: idList(20),
+    /**
+     * Does joining this project need the person's acceptance?
+     *
+     * Null (the default) follows WorkspaceSettings.requireProjectAcceptance.
+     * Only a super admin may set it — deciding that people are placed on work
+     * without being asked is an org-wide policy call, not a per-manager one.
+     */
+    requireAcceptance: z.boolean().nullish(),
   })
   .strict();
 
