@@ -34,6 +34,7 @@ export const MODULE_SLUGS = [
   "requests",
   "settings",
   "teams",
+  "me",
   // Super-admin only: the roster floor. No role lists it in BY_ROLE below, so
   // the only way in is superAdmin (who short-circuits to everything) or an
   // explicit grant from one.
@@ -77,7 +78,7 @@ export const MASTER_MODULES: readonly ModuleSlug[] = ["dashboard", "companies", 
  * learn anything, and Requests is where you ACCEPT a project — withholding it
  * would leave an invitation with nowhere to be answered.
  */
-const BASELINE: readonly ModuleSlug[] = ["settings", "notifications", "requests"];
+const BASELINE: readonly ModuleSlug[] = ["settings", "notifications", "requests", "me"];
 
 const BY_ROLE: Record<Role, readonly ModuleSlug[]> = {
   superAdmin: ALL,
