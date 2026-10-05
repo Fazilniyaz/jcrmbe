@@ -14,6 +14,7 @@ import {
   verifyRefreshToken,
 } from "../../lib/jwt";
 import { effectiveModules, moduleLevels } from "../../lib/modules";
+import { liveStatus, presenceOf } from "../../lib/presence";
 
 /*
  * Sign-in, session rotation and sign-out.
@@ -83,6 +84,12 @@ const AUTH_USER_SELECT = {
   branchId: true,
   phone: true,
   tone: true,
+  avatar: true,
+  statusText: true,
+  statusEmoji: true,
+  statusUntil: true,
+  presence: true,
+  lastSeenAt: true,
   failedLoginCount: true,
   lockedUntil: true,
   company: { select: { id: true, companyName: true, state: true, email: true, headBranch: true } },
@@ -113,6 +120,10 @@ export function publicUser(user: AuthUser) {
     branchId: user.branchId,
     phone: user.phone,
     tone: user.tone,
+    avatar: user.avatar,
+    status: liveStatus(user),
+    presence: presenceOf(user),
+    presenceMode: user.presence,
     modules: effectiveModules(user.roles, user.moduleAccess),
     // The same set with the level each was granted at, so the UI can show a
     // module read-only instead of offering edits the API will refuse.

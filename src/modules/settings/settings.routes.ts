@@ -9,10 +9,14 @@ import {
   setModuleAccessSchema,
   updateProfileSchema,
   workspaceSchema,
+  presenceSchema,
+  setStatusSchema,
   type ChangePasswordInput,
   type SetModuleAccessInput,
   type UpdateProfileInput,
   type WorkspaceInput,
+  type PresenceInput,
+  type SetStatusInput,
 } from "./settings.schema";
 import {
   changePassword,
@@ -23,6 +27,8 @@ import {
   setModuleAccess,
   updateProfile,
   updateWorkspace,
+  setStatus,
+  touchPresence,
 } from "./settings.service";
 
 export const settingsRouter = Router();
@@ -45,6 +51,15 @@ settingsRouter.post(
     ok(res, await changePassword(actor(req), body<ChangePasswordInput>(req)));
   },
 );
+
+settingsRouter.patch("/status", validate({ body: setStatusSchema }), async (req, res) => {
+  ok(res, await setStatus(actor(req), body<SetStatusInput>(req)));
+});
+
+/* The heartbeat. Called on a timer by the open app — see lib/presence.ts. */
+settingsRouter.post("/presence", validate({ body: presenceSchema }), async (req, res) => {
+  ok(res, await touchPresence(actor(req), body<PresenceInput>(req)));
+});
 
 settingsRouter.get("/modules", (req, res) => {
   ok(res, moduleRegistry(actor(req)));

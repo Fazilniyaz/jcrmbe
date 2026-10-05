@@ -13,12 +13,15 @@ import {
   type ModuleSlug,
 } from "../../lib/modules";
 import { isSuperAdmin, type UserAuth } from "../../middleware/auth";
+import { presenceOf } from "../../lib/presence";
 import { revokeAllSessions } from "../auth/auth.service";
 import { resolveScope } from "../branches/branches.service";
 import { ALL_BRANCHES } from "../branches/branches.schema";
 import type {
   ChangePasswordInput,
+  PresenceInput,
   SetModuleAccessInput,
+  SetStatusInput,
   UpdateProfileInput,
   WorkspaceInput,
 } from "./settings.schema";
@@ -77,9 +80,53 @@ export async function updateProfile(auth: UserAuth, input: UpdateProfileInput) {
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.phone !== undefined ? { phone: input.phone || null } : {}),
       ...(input.tone !== undefined ? { tone: input.tone } : {}),
+      ...(input.avatar !== undefined ? { avatar: input.avatar } : {}),
     },
   });
   return getProfile(auth);
+}
+
+/* ------------------------------------------------- status and presence -- */
+
+/**
+ * Set or clear the status line.
+ *
+ * A field left out is left alone; a field sent as null is cleared. That is what
+ * lets "clear my status" be this same endpoint with nulls rather than a second
+ * one, and what lets the duration be changed without resending the text.
+ */
+export async function setStatus(auth: UserAuth, input: SetStatusInput) {
+  await prisma.user.update({
+    where: { id: auth.userId },
+    data: {
+      ...(input.text !== undefined ? { statusText: input.text || null } : {}),
+      ...(input.emoji !== undefined ? { statusEmoji: input.emoji || null } : {}),
+      ...(input.until !== undefined
+        ? { statusUntil: input.until ? new Date(input.until) : null }
+        : {}),
+    },
+  });
+  return getProfile(auth);
+}
+
+/**
+ * The heartbeat.
+ *
+ * Called by the open app on a timer. It stamps `lastSeenAt`, which is the only
+ * thing "online" is derived from, and optionally flips the manual away switch.
+ * Deliberately cheap: one indexed update, no reads, nothing returned but the
+ * resolved presence.
+ */
+export async function touchPresence(auth: UserAuth, input: PresenceInput) {
+  const user = await prisma.user.update({
+    where: { id: auth.userId },
+    data: {
+      lastSeenAt: new Date(),
+      ...(input.presence !== undefined ? { presence: input.presence } : {}),
+    },
+    select: { presence: true, lastSeenAt: true },
+  });
+  return { presence: presenceOf(user), mode: user.presence };
 }
 
 /* ------------------------------------------------------------- password -- */

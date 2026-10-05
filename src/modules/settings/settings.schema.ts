@@ -13,9 +13,41 @@ export const updateProfileSchema = z
       .regex(/^[+0-9 ()-]*$/, "Digits, spaces and + ( ) - only.")
       .optional(),
     tone: z.enum(["blue", "sky", "orange", "red", "slate"]).optional(),
+    /*
+     * The avatar, as a data URL the client has already squared and compressed.
+     *
+     * The regex is the guard that matters: only an image data URL is accepted,
+     * so this field cannot be used to smuggle a script or an arbitrary link
+     * into something that is rendered as `src` on every screen. Null clears it.
+     * ~192 KB of base64 is about a 128px JPEG with room to spare.
+     */
+    avatar: z
+      .string()
+      .regex(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/, "Not an image.")
+      .max(196_608, "That picture is too large — try a smaller one.")
+      .nullable()
+      .optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, "Nothing to update.");
+
+/**
+ * The status line. Everything is optional and nullable: clearing a status is
+ * sending nulls, not a separate endpoint.
+ */
+export const setStatusSchema = z
+  .object({
+    text: z.string().trim().max(100).nullable().optional(),
+    emoji: z.string().trim().max(16).nullable().optional(),
+    /** When it lapses. Null means "until I clear it". */
+    until: z.string().datetime().nullable().optional(),
+  })
+  .strict();
+
+/** The heartbeat, and the manual away switch. */
+export const presenceSchema = z
+  .object({ presence: z.enum(["auto", "away"]).optional() })
+  .strict();
 
 export const changePasswordSchema = z
   .object({
@@ -66,3 +98,5 @@ export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 export type SetModuleAccessInput = z.infer<typeof setModuleAccessSchema>;
 export type WorkspaceInput = z.infer<typeof workspaceSchema>;
+export type SetStatusInput = z.infer<typeof setStatusSchema>;
+export type PresenceInput = z.infer<typeof presenceSchema>;

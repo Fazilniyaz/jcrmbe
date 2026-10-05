@@ -335,8 +335,33 @@ model User {
   updatedAt       DateTime        @updatedAt
 
   // FRONTEND-PARITY: Employee.phone / Employee.tone (avatar colour).
-  phone            String?
-  tone             String    @default("blue")
+  phone String?
+  tone  String  @default("blue")
+
+  /// Profile picture, as a compressed data URL.
+  ///
+  /// On the row rather than in the attachment store on purpose: an avatar is
+  /// tiny (the client squares and compresses it before sending), it is read on
+  /// every screen that shows a person, and keeping it here means no second
+  /// request and no signed-URL dance just to draw a face.
+  avatar String?
+
+  /// The Slack-style status: a short line, an emoji, and when it lapses.
+  ///
+  /// An expired `statusUntil` is treated as "no status" by every reader rather
+  /// than being cleared by a job — so a lapsed status costs nothing and no
+  /// scheduler has to exist for this to be correct.
+  statusText  String?
+  statusEmoji String?
+  statusUntil DateTime?
+
+  /// Presence. `lastSeenAt` is stamped by a heartbeat from the open app and
+  /// "online" is DERIVED from it being recent, so a crashed tab or a shut
+  /// laptop goes offline on its own instead of leaving a green dot behind.
+  /// `presence` is the manual override: "auto" or "away".
+  presence   String    @default("auto")
+  lastSeenAt DateTime?
+
   // Login throttling — a per-account lockout that survives a restart, because
   // the API is stateless and must not keep counters in instance memory.
   failedLoginCount Int       @default(0)

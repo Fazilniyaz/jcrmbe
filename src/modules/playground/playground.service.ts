@@ -1,5 +1,6 @@
 import { prisma } from "../../lib/prisma";
 import type { UserAuth } from "../../middleware/auth";
+import { liveStatus, presenceOf, type Presence } from "../../lib/presence";
 
 /*
  * The roster behind "Your Playground".
@@ -25,6 +26,9 @@ export type PlaygroundPerson = {
   currentStatus: string;
   branch: string | null;
   tone: string;
+  avatar: string | null;
+  presence: Presence;
+  status: { text: string | null; emoji: string | null; until: string | null };
   kra: number;
   phone: string | null;
   joinedAt: string;
@@ -49,6 +53,12 @@ export async function getPlayground(auth: UserAuth) {
         empStatus: true,
         currentStatus: true,
         tone: true,
+        avatar: true,
+        statusText: true,
+        statusEmoji: true,
+        statusUntil: true,
+        presence: true,
+        lastSeenAt: true,
         kra: true,
         phone: true,
         joinedAt: true,
@@ -106,6 +116,9 @@ export async function getPlayground(auth: UserAuth) {
     currentStatus: u.currentStatus,
     branch: u.branch?.name ?? null,
     tone: u.tone,
+    avatar: u.avatar,
+    presence: presenceOf(u),
+    status: liveStatus(u),
     kra: u.kra,
     phone: u.phone,
     joinedAt: u.joinedAt.toISOString(),
