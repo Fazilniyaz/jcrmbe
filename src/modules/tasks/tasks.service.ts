@@ -51,6 +51,7 @@ const TASK_SELECT = {
   assigneeId: true,
   assigneeIds: true,
   teamIds: true,
+  order: true,
   reportToIds: true,
   createdById: true,
   state: true,
@@ -397,6 +398,9 @@ export async function createTask(auth: UserAuth, input: CreateTaskInput) {
       assigneeId: assigneeIds[0] ?? null,
       assigneeIds,
       teamIds,
+      // Appended by default. Clock-based so a new task lands after everything
+      // created before it without reading the group first.
+      order: input.order ?? Date.now(),
       reportToIds: [...new Set(input.reportToIds)],
       createdById: auth.userId,
       state: input.state,
@@ -460,6 +464,8 @@ export async function updateTask(auth: UserAuth, id: string, input: UpdateTaskIn
     input.description !== undefined ||
     input.projectIds !== undefined ||
     input.assigneeIds !== undefined ||
+    // A team is a set of assignees, so changing it changes who is on the work.
+    input.teamIds !== undefined ||
     input.reportToIds !== undefined ||
     input.kraPoints !== undefined ||
     input.taskCode !== undefined ||
@@ -507,6 +513,9 @@ export async function updateTask(auth: UserAuth, id: string, input: UpdateTaskIn
       ...(input.projectIds ? { projectIds, projectId: projectIds[0]! } : {}),
       ...(input.assigneeIds ? { assigneeIds, assigneeId: assigneeIds[0] ?? null } : {}),
       ...(input.reportToIds ? { reportToIds: [...new Set(input.reportToIds)] } : {}),
+      ...(input.teamIds ? { teamIds: [...new Set(input.teamIds)] } : {}),
+      // Dragging a row in the grid writes only this.
+      ...(input.order !== undefined ? { order: input.order } : {}),
       ...(input.state !== undefined ? { state: input.state } : {}),
       ...(input.priorityLevel !== undefined
         ? { priorityLevel: input.priorityLevel, priority: priorityFromLevel(input.priorityLevel) }

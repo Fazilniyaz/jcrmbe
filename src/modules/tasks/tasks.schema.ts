@@ -65,6 +65,8 @@ export const createTaskSchema = z
      * kept only as a reference — see the Team model.
      */
     teamIds: z.array(objectId).max(20).default([]),
+    /** Manual sort position for the grid. Omitted means "put it at the end". */
+    order: z.number().optional(),
     reportToIds: z.array(objectId).max(20).default([]),
     state: taskStateEnum.default("notStarted"),
     /** 1 = do first, 5 = whenever. */

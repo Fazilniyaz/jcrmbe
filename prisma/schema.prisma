@@ -440,14 +440,21 @@ model Task {
   // assignees, so the canonical single-valued `projectId` / `assigneeId` are
   // kept as the PRIMARY of each list and the full lists live alongside.
   // The service keeps projectId === projectIds[0] and assigneeId === assigneeIds[0].
-  projectIds    String[]          @db.ObjectId
-  assigneeIds   String[]          @db.ObjectId
-  reportToIds   String[]          @db.ObjectId
+  projectIds  String[] @db.ObjectId
+  assigneeIds String[] @db.ObjectId
+  reportToIds String[] @db.ObjectId
   /**
    * Teams assigned to this task. As on Project: a reference for display, with
    * the people expanded into `assigneeIds` so the task rules are unchanged.
    */
-  teamIds       String[]          @db.ObjectId
+  teamIds     String[] @db.ObjectId
+
+  /// Manual sort position, for dragging rows in the grid view.
+  ///
+  /// A Float, not an Int, on purpose: dropping a row between two others sets it
+  /// to the MIDPOINT of its neighbours, so one row moves and nothing else is
+  /// rewritten. An Int would force renumbering the whole group on every drop.
+  order         Float             @default(0)
   taskCode      String? // human-facing "TSK-001"
   // 1..5, the frontend's P1–P5. `priority` above stays the canonical field and
   // is derived from this: 1 urgent, 2 high, 3 medium, 4-5 low.

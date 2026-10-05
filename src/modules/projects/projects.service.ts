@@ -548,9 +548,37 @@ async function nextCodeForCompany(companyId: string): Promise<string> {
 /* ---------------------------------------------------------------- update -- */
 
 export async function updateProject(auth: UserAuth, id: string, input: UpdateProjectInput) {
-  await assertCanManage(auth, id);
+  const existing = await assertCanManage(auth, id);
+
+  /*
+   * Teams added by an edit are expanded the same way create does it.
+   *
+   * This used to be dropped on the floor: `teamIds` never reached the update
+   * payload, so putting a team on an existing project saved nothing and added
+   * nobody — the project then reported that it had no members at all.
+   *
+   * Only the teams that are NEW in this edit are expanded. Re-saving a project
+   * must not re-invite people who already answered, and removing a team must
+   * not remove the people it brought — they were placed individually and may
+   * have work on it.
+   */
+  const nextTeamIds = input.teamIds ? [...new Set(input.teamIds)] : undefined;
+  if (nextTeamIds && !isSuperAdmin(auth)) {
+    throw ApiError.forbidden("Only a super admin can change the teams on a project.");
+  }
+  if (input.requireAcceptance !== undefined && !isSuperAdmin(auth)) {
+    throw ApiError.forbidden("Only a super admin can change the acceptance rule for a project.");
+  }
+
+  const addedTeams = nextTeamIds
+    ? nextTeamIds.filter((t) => !existing.teamIds.includes(t))
+    : [];
 
   const data: Prisma.ProjectUpdateInput = {
+    ...(nextTeamIds !== undefined ? { teamIds: nextTeamIds } : {}),
+    ...(input.requireAcceptance !== undefined
+      ? { requireAcceptance: input.requireAcceptance ?? null }
+      : {}),
     ...(input.name !== undefined ? { name: input.name } : {}),
     ...(input.description !== undefined ? { description: input.description ?? null } : {}),
     ...(input.code !== undefined ? { code: input.code ?? null } : {}),
@@ -564,6 +592,15 @@ export async function updateProject(auth: UserAuth, id: string, input: UpdatePro
   };
 
   const project = await prisma.project.update({ where: { id }, data, select: PROJECT_SELECT });
+
+  if (addedTeams.length > 0) {
+    const people = await membersOfTeams(auth.companyId, addedTeams);
+    if (people.length > 0) {
+      // skipManageCheck: we just proved the caller can manage this project.
+      await inviteMembers(auth, id, people, "member", { skipManageCheck: true });
+    }
+  }
+
   const members = await prisma.projectMember.findMany({ where: { projectId: id }, select: MEMBER_SELECT });
   const progress = await progressFor([id]);
 
