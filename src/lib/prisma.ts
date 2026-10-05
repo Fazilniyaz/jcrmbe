@@ -6,7 +6,15 @@ import { logger } from "./logger";
  * One client for the process. Prisma pools connections internally, so a second
  * instance would double the pool against Atlas for no benefit — and under
  * `tsx watch` would leak a pool per reload, which is why the handle is cached
- * on globalThis outside production.
+ * on globalThis.
+ *
+ * The cache is UNCONDITIONAL, including in production. It used to be skipped
+ * there on the reasoning that a long-lived server evaluates this module once
+ * anyway — true for `node dist/index.js`, and not true on a serverless
+ * platform, where a bundler may evaluate it more than once per instance and
+ * every extra evaluation is another pool against the same Atlas connection
+ * cap. On a single-process server the global is simply one more reference to
+ * the object the module already holds, so nothing is lost by keeping it.
  */
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
@@ -40,7 +48,7 @@ export const prisma =
     transactionOptions: TRANSACTION_OPTIONS,
   });
 
-if (!env.isProduction) globalForPrisma.prisma = prisma;
+globalForPrisma.prisma = prisma;
 
 export async function disconnectPrisma() {
   await prisma.$disconnect().catch((err) => logger.error({ err }, "prisma disconnect failed"));

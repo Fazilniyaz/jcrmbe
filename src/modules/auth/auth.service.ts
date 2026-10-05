@@ -28,14 +28,20 @@ export const REFRESH_COOKIE = "jadvix_refresh";
 
 /**
  * Scoped to the auth routes so the browser never attaches it to a data request.
- * SameSite=Lax means it does not ride along on a cross-site form post either,
- * which is the CSRF story for the refresh endpoint.
+ *
+ * SameSite defaults to Lax, which means it does not ride along on a cross-site
+ * form post either — that is the CSRF story for the refresh endpoint. It is
+ * configurable only because a deployment that puts the app and the API on
+ * different registrable domains (two *.vercel.app hostnames, say) cannot use
+ * Lax at all: the cookie is never sent and the session dies at the first
+ * refresh. See COOKIE_SAMESITE in config/env.ts, and prefer subdomains of one
+ * domain over setting it to `none`.
  */
 function cookieOptions() {
   return {
     httpOnly: true,
     secure: env.cookieSecure,
-    sameSite: "lax" as const,
+    sameSite: env.cookieSameSite,
     path: "/api/v1/auth",
     maxAge: durationMs(env.REFRESH_TOKEN_TTL),
   };

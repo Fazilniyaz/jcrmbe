@@ -1,0 +1,6 @@
+# The long-lived server build. Vercel compiles api/index.ts itself and never
+# runs `npm start`, so shipping dist/ is dead weight in the function bundle.
+dist
+var
+.env
+.env.*

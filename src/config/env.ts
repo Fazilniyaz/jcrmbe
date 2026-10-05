@@ -39,6 +39,22 @@ const schema = z.object({
       v === undefined || v === "" ? undefined : v === "1" || v.toLowerCase() === "true",
     ),
 
+  /*
+   * SameSite for the refresh cookie.
+   *
+   * `lax` is right whenever the app and the API share a registrable domain —
+   * app.example.com calling api.example.com is same-site, and Lax is then both
+   * sent and a CSRF defence.
+   *
+   * `none` is REQUIRED when they do not. Two different *.vercel.app hostnames
+   * are cross-site, because `vercel.app` is on the Public Suffix List, so a Lax
+   * cookie is simply never sent to the API and every session dies silently at
+   * the first token refresh — a login that works and then logs you out, with
+   * nothing in any log. `none` also forces `secure`, which the browser
+   * requires and which is enforced below rather than left to be remembered.
+   */
+  COOKIE_SAMESITE: z.enum(["lax", "none", "strict"]).default("lax"),
+
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
 
   JWT_ACCESS_SECRET: secret,
@@ -139,8 +155,15 @@ const raw = parsed.data;
 export const env = Object.freeze({
   ...raw,
   isProduction: raw.NODE_ENV === "production",
-  /** Secure flag for the refresh cookie: explicit COOKIE_SECURE wins, else follows prod. */
-  cookieSecure: raw.COOKIE_SECURE ?? raw.NODE_ENV === "production",
+  /**
+   * Secure flag for the refresh cookie: explicit COOKIE_SECURE wins, else
+   * follows prod — EXCEPT that SameSite=None is only legal on a Secure cookie,
+   * so it wins over both. A browser drops `SameSite=None` without `Secure`
+   * entirely, which would look exactly like the bug the setting exists to fix.
+   */
+  cookieSecure:
+    raw.COOKIE_SAMESITE === "none" || (raw.COOKIE_SECURE ?? raw.NODE_ENV === "production"),
+  cookieSameSite: raw.COOKIE_SAMESITE,
   /** CORS_ORIGIN accepts a comma-separated list so staging can allow two hosts. */
   corsOrigins: raw.CORS_ORIGIN.split(",")
     .map((o) => o.trim())
