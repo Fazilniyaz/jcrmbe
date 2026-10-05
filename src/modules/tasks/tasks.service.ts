@@ -51,6 +51,7 @@ const TASK_SELECT = {
   assigneeId: true,
   assigneeIds: true,
   teamIds: true,
+  sprintId: true,
   order: true,
   reportToIds: true,
   createdById: true,
@@ -71,6 +72,9 @@ const TASK_SELECT = {
   createdAt: true,
   updatedAt: true,
   project: { select: { id: true, name: true, code: true } },
+  // The lane this card sits in. Selected rather than joined client-side so the
+  // board can label a row without a second request per sprint.
+  sprint: { select: { id: true, name: true, tone: true, state: true } },
 } satisfies Prisma.TaskSelect;
 
 type TaskRow = Prisma.TaskGetPayload<{ select: typeof TASK_SELECT }>;
@@ -289,6 +293,30 @@ async function assertProjectsWritable(auth: UserAuth, projectIds: string[]) {
   }
 }
 
+/**
+ * A sprint has to belong to one of the task's own projects.
+ *
+ * Without this a card could be filed into a lane of a project it is not on,
+ * where it would be invisible to everyone working that board and would still
+ * count towards the lane's progress. Null is always fine — that is the
+ * backlog.
+ */
+async function assertSprintFits(
+  auth: UserAuth,
+  sprintId: string | null | undefined,
+  projectIds: readonly string[],
+) {
+  if (!sprintId) return;
+  const sprint = await prisma.sprint.findFirst({
+    where: { id: sprintId, companyId: auth.companyId },
+    select: { projectId: true },
+  });
+  if (!sprint) throw ApiError.badRequest("No such sprint.");
+  if (!projectIds.includes(sprint.projectId)) {
+    throw ApiError.badRequest("That sprint belongs to a different project.");
+  }
+}
+
 /* ------------------------------------------------------------------ list -- */
 
 export async function listTasks(auth: UserAuth, query: ListTasksQuery) {
@@ -373,6 +401,7 @@ export async function createTask(auth: UserAuth, input: CreateTaskInput) {
   const fromTeams = await membersOfTeams(auth.companyId, teamIds);
   const assigneeIds = [...new Set([...input.assigneeIds, ...fromTeams])];
   await assertAssignable(auth, projectIds, assigneeIds);
+  await assertSprintFits(auth, input.sprintId, projectIds);
 
   const createdAt = new Date().toISOString();
   const checklist = input.checklist.map((line) =>
@@ -398,6 +427,7 @@ export async function createTask(auth: UserAuth, input: CreateTaskInput) {
       assigneeId: assigneeIds[0] ?? null,
       assigneeIds,
       teamIds,
+      sprintId: input.sprintId ?? null,
       // Appended by default. Clock-based so a new task lands after everything
       // created before it without reading the group first.
       order: input.order ?? Date.now(),
@@ -477,6 +507,19 @@ export async function updateTask(auth: UserAuth, id: string, input: UpdateTaskIn
   const projectIds = input.projectIds ? [...new Set(input.projectIds)] : before.projectIds;
   if (input.projectIds) await assertProjectsWritable(auth, projectIds);
 
+  /*
+   * Checked against the projects the task will HAVE, and re-checked even when
+   * only the projects moved: taking a task off the project its sprint belongs
+   * to would otherwise leave it in a lane it can no longer be seen in.
+   */
+  if (input.sprintId !== undefined || input.projectIds !== undefined) {
+    await assertSprintFits(
+      auth,
+      input.sprintId !== undefined ? input.sprintId : before.sprintId,
+      projectIds,
+    );
+  }
+
   const assigneeIds = input.assigneeIds ? [...new Set(input.assigneeIds)] : before.assigneeIds;
   if (input.assigneeIds) await assertAssignable(auth, projectIds, assigneeIds);
 
@@ -514,6 +557,8 @@ export async function updateTask(auth: UserAuth, id: string, input: UpdateTaskIn
       ...(input.assigneeIds ? { assigneeIds, assigneeId: assigneeIds[0] ?? null } : {}),
       ...(input.reportToIds ? { reportToIds: [...new Set(input.reportToIds)] } : {}),
       ...(input.teamIds ? { teamIds: [...new Set(input.teamIds)] } : {}),
+      // Dragging a card between sprint lanes writes only this.
+      ...(input.sprintId !== undefined ? { sprintId: input.sprintId ?? null } : {}),
       // Dragging a row in the grid writes only this.
       ...(input.order !== undefined ? { order: input.order } : {}),
       ...(input.state !== undefined ? { state: input.state } : {}),

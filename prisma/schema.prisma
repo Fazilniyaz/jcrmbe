@@ -274,6 +274,8 @@ model Company {
   notifications Notification[]
   clients       Client[]
   teams         Team[]
+  sprints       Sprint[]
+  shifts        Shift[]
 }
 
 model Branch {
@@ -331,6 +333,7 @@ model User {
   createdTasks    Task[]          @relation("TaskCreatedBy")
   kraEvents       KraEvent[]
   refreshTokens   RefreshToken[]
+  shifts          Shift[]         @relation("ShiftUser")
   joinedAt        DateTime        @default(now()) // = createdAt
   updatedAt       DateTime        @updatedAt
 
@@ -420,6 +423,9 @@ model Project {
    */
   requireAcceptance Boolean?
 
+  /// The project's own sprints. Many per project — see the Sprint model.
+  sprints Sprint[]
+
   @@index([companyId])
 }
 
@@ -479,7 +485,16 @@ model Task {
   /// A Float, not an Int, on purpose: dropping a row between two others sets it
   /// to the MIDPOINT of its neighbours, so one row moves and nothing else is
   /// rewritten. An Int would force renumbering the whole group on every drop.
-  order         Float             @default(0)
+  order Float @default(0)
+
+  /// The sprint this task sits in, or null for the backlog.
+  ///
+  /// Nullable on purpose: a project's first task exists before its first
+  /// sprint does, and work that has not been planned into one still has to be
+  /// filed somewhere. The service enforces that the sprint belongs to one of
+  /// the task's own projects.
+  sprintId      String?           @db.ObjectId
+  sprint        Sprint?           @relation(fields: [sprintId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   taskCode      String? // human-facing "TSK-001"
   // 1..5, the frontend's P1–P5. `priority` above stays the canonical field and
   // is derived from this: 1 urgent, 2 high, 3 medium, 4-5 low.
@@ -496,6 +511,10 @@ model Task {
   @@index([assigneeId])
   @@index([companyId])
   @@index([companyId, state])
+  // The sprint board reads every lane's task count on each render, and both
+  // the grouped counts and the "release this sprint's tasks" update filter on
+  // sprintId. Without this each one is a collection scan.
+  @@index([companyId, sprintId])
 }
 
 /**
@@ -671,4 +690,90 @@ model Team {
   // One name per company, so "Platform" is unambiguous in a picker.
   @@unique([companyId, name])
   @@index([companyId])
+}
+
+/**
+ * ---------------------------------------------------------------- sprints --
+ */
+
+enum SprintState {
+  planned
+  active
+  completed
+  cancelled
+}
+
+/**
+ * A sprint: one slice of a project's work, with a window and a goal.
+ * Scoped to a PROJECT rather than to the company, because that is how the
+ * board reads: a project has many sprints, a sprint belongs to exactly one
+ * project, and a task sits in at most one sprint of its own project. Tasks
+ * outside every sprint are legal and land in the board's "Backlog" lane —
+ * requiring a sprint would have made the first task of a new project
+ * impossible to file.
+ * `order` is a Float for the same reason Task.order is: dropping a sprint
+ * between two others takes the midpoint and rewrites one row.
+ */
+model Sprint {
+  id          String      @id @default(auto()) @map("_id") @db.ObjectId
+  companyId   String      @db.ObjectId
+  company     Company     @relation(fields: [companyId], references: [id])
+  projectId   String      @db.ObjectId
+  project     Project     @relation(fields: [projectId], references: [id])
+  name        String
+  /// What this sprint is FOR, in one line. Shown under the lane heading.
+  goal        String?
+  state       SprintState @default(planned)
+  /// Lane colour, same vocabulary as User.tone and Team.tone.
+  tone        String      @default("violet")
+  startDate   DateTime?
+  endDate     DateTime?
+  order       Float       @default(0)
+  createdById String      @db.ObjectId
+  tasks       Task[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  // One sprint name per project — "Sprint 1" in two projects is fine, twice in
+  // one project is a mistake someone would stare at for a while.
+  @@unique([projectId, name])
+  @@index([companyId])
+  @@index([projectId])
+}
+
+/**
+ * ------------------------------------------------------------- attendance --
+ */
+
+/**
+ * One shift. Clock in, optional breaks, clock out.
+ * Open shift == `outAt` is null, and that is the ONLY definition of "clocked
+ * in" anywhere in the product. A stored boolean would have to be kept in step
+ * with the row and would drift the first time a process died mid-write.
+ * `date` is the local calendar day as `YYYY-MM-DD`, stored as a string rather
+ * than derived from `inAt`: a shift that starts at 23:40 belongs to the day the
+ * person says they started, not to whichever day UTC thinks it is.
+ */
+model Shift {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  companyId    String    @db.ObjectId
+  company      Company   @relation(fields: [companyId], references: [id])
+  userId       String    @db.ObjectId
+  user         User      @relation("ShiftUser", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  date         String
+  inAt         DateTime
+  outAt        DateTime?
+  /// Total minutes on break across the shift, accumulated as breaks end.
+  breakMinutes Int       @default(0)
+  /// When the current break started, or null when not on one.
+  breakAt      DateTime?
+  note         String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([companyId, date])
+  @@index([userId, date])
+  // The open-shift lookup, which runs on every clock action and every roster
+  // read. Without it that is a collection scan per request.
+  @@index([companyId, outAt])
 }

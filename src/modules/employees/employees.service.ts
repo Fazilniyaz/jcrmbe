@@ -3,6 +3,7 @@ import { env } from "../../config/env";
 import { ApiError } from "../../lib/errors";
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
+import { liveStatus, presenceOf } from "../../lib/presence";
 import { withEmpId } from "../../lib/empId";
 import { INVITE_TTL_MS, issueToken } from "../../lib/tokens";
 import { employeeInviteMail, queueMail } from "../../lib/mailer";
@@ -41,6 +42,15 @@ const EMPLOYEE_SELECT = {
   reportsTo: { select: { id: true, name: true, empId: true } },
   phone: true,
   tone: true,
+  avatar: true,
+  // The self-written status and the heartbeat behind the presence dot. Both
+  // are read by the Employees table and the Clock roster, which would
+  // otherwise need a second request per person to colour one tag.
+  statusText: true,
+  statusEmoji: true,
+  statusUntil: true,
+  presence: true,
+  lastSeenAt: true,
   joinedAt: true,
   updatedAt: true,
   lastLoginAt: true,
@@ -55,9 +65,25 @@ type EmployeeRow = Prisma.UserGetPayload<{ select: typeof EMPLOYEE_SELECT }>;
  * the existing Employees UI already renders (`Employee.branch` is a string).
  */
 export function toEmployee(row: EmployeeRow) {
-  const { inviteTokenHash, branch, reportsTo, ...rest } = row;
+  const {
+    inviteTokenHash,
+    branch,
+    reportsTo,
+    statusText,
+    statusEmoji,
+    statusUntil,
+    presence,
+    ...rest
+  } = row;
   return {
     ...rest,
+    // Derived, never stored — see src/lib/presence.ts. A lapsed status is no
+    // status, which is resolved here so no client has to check the clock.
+    presence: presenceOf({ presence, lastSeenAt: row.lastSeenAt }),
+    // The manual switch behind it, kept separate: "away" is a choice the
+    // person made, "offline" is a conclusion the server drew.
+    presenceMode: presence,
+    status: liveStatus({ statusText, statusEmoji, statusUntil }),
     branch: branch?.name ?? null,
     branchIsHead: branch?.isHead ?? false,
     reportsTo: reportsTo ?? null,

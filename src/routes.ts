@@ -12,6 +12,8 @@ import { settingsRouter } from "./modules/settings/settings.routes";
 import { notificationsRouter } from "./modules/notifications/notifications.routes";
 import { playgroundRouter } from "./modules/playground/playground.routes";
 import { teamsRouter } from "./modules/teams/teams.routes";
+import { sprintsRouter } from "./modules/sprints/sprints.routes";
+import { clockRouter } from "./modules/clock/clock.routes";
 
 /*
  * The API surface, versioned at /api/v1.
@@ -38,3 +40,5 @@ router.use("/settings", settingsRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/playground", playgroundRouter);
 router.use("/teams", teamsRouter);
+router.use("/sprints", sprintsRouter);
+router.use("/clock", clockRouter);

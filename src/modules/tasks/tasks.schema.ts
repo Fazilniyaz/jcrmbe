@@ -67,6 +67,12 @@ export const createTaskSchema = z
     teamIds: z.array(objectId).max(20).default([]),
     /** Manual sort position for the grid. Omitted means "put it at the end". */
     order: z.number().optional(),
+    /**
+     * The sprint this task is filed into, or null for the project's backlog.
+     * Nullable rather than merely optional: clearing it is how work goes back
+     * to the backlog, and an omitted field has to keep meaning "leave it".
+     */
+    sprintId: objectId.nullish(),
     reportToIds: z.array(objectId).max(20).default([]),
     state: taskStateEnum.default("notStarted"),
     /** 1 = do first, 5 = whenever. */
