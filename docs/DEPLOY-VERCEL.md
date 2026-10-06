@@ -139,10 +139,14 @@ Fine for testing; move to Option A before real use.
 
    | Key | Value |
    |---|---|
-   | `NEXT_PUBLIC_API_URL` | `https://api.yourdomain.com/api/v1` |
+   | `NEXT_PUBLIC_API_URL` | `https://api.yourdomain.com` |
 
-   Note the `/api/v1`. It is `NEXT_PUBLIC_`, so it is **baked in at build
-   time** — changing it later needs a redeploy, not just a restart.
+   **The ORIGIN only — do not add `/api/v1`.** The client appends that itself
+   (`lib/api/token.ts` builds `API_ROOT` as `${NEXT_PUBLIC_API_URL}/api/v1`),
+   so including it produces `/api/v1/api/v1` and every request 404s.
+
+   It is `NEXT_PUBLIC_`, so it is **baked in at build time** — changing it
+   later needs a redeploy, not just a restart.
 3. Deploy, then go back to the API project and make sure `CORS_ORIGIN` names
    the real app domain. Redeploy the API after changing it (see the last
    section — the change does nothing until you do).
