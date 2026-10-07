@@ -91,7 +91,17 @@ const schema = z.object({
     .optional()
     .default("")
     .transform((v) => v.replace(/\s+/g, "")),
-  MAIL_FROM: z.string().min(1).default("Jadvix <no-reply@jadvix.local>"),
+  /*
+   * The From address. Left empty it is DERIVED from GMAIL_USER below.
+   *
+   * It used to default to "Jadvix <no-reply@jadvix.local>", which is wrong in
+   * a way that only shows up once mail is actually configured: Gmail will not
+   * send as an address that is neither the authenticated account nor one of
+   * its verified aliases, so it rewrites or refuses the message. A `.local`
+   * TLD is not deliverable anywhere either. Deriving it from the account that
+   * is doing the sending is the only default that can work.
+   */
+  MAIL_FROM: z.string().optional().default(""),
 
   /*
    * Where task attachments are written.
@@ -170,6 +180,14 @@ export const env = Object.freeze({
     .filter(Boolean),
   /** Mail is only actually sent once an App Password is present. */
   mailEnabled: Boolean(raw.GMAIL_USER && raw.GMAIL_APP_PASSWORD),
+  /**
+   * Who the mail comes from.
+   *
+   * An explicit MAIL_FROM wins — that is how you use a verified "Send mail as"
+   * alias. Otherwise it is the Gmail account itself, which is the only address
+   * Gmail will accept without one.
+   */
+  mailFrom: raw.MAIL_FROM || (raw.GMAIL_USER ? `Jadvix <${raw.GMAIL_USER}>` : ""),
   masterLoginEnabled: raw.MASTER_PASSWORD_HASH.length > 0,
   /*
    * Attachments go to ImageKit only when all three credentials are present.

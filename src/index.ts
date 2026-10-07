@@ -19,7 +19,22 @@ async function main() {
       logger.warn("MASTER_PASSWORD_HASH is empty — master login is disabled. Run: npm run hash-master");
     }
     if (!env.mailEnabled) {
-      logger.warn("GMAIL_APP_PASSWORD is empty — invite emails will be logged, not sent.");
+      logger.warn(
+        "GMAIL_USER / GMAIL_APP_PASSWORD are empty — invite emails are logged, not sent. " +
+          "The invite URL comes back in the API response instead, so the flow still completes.",
+      );
+    } else if (env.GMAIL_USER && !env.mailFrom.toLowerCase().includes(env.GMAIL_USER)) {
+      /*
+       * Gmail only sends as the authenticated account or one of its verified
+       * "Send mail as" aliases. Anything else is rewritten or refused, and
+       * because delivery is fire-and-forget the only sign is a line in this
+       * log — so say it once, loudly, at boot.
+       */
+      logger.warn(
+        { mailFrom: env.mailFrom, gmailUser: env.GMAIL_USER },
+        "MAIL_FROM is not the Gmail account — Gmail will only send as that account " +
+          "or a verified alias. Clear MAIL_FROM to derive it, or set up the alias.",
+      );
     }
   });
 

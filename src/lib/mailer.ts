@@ -81,7 +81,7 @@ export async function sendMail(mail: Mail): Promise<{ sent: boolean }> {
   }
 
   try {
-    await transport.sendMail({ from: env.MAIL_FROM, ...mail });
+    await transport.sendMail({ from: env.mailFrom, ...mail });
     logger.info({ to: mail.to, subject: mail.subject }, "mail sent");
     return { sent: true };
   } catch (err) {
