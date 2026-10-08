@@ -40,6 +40,15 @@ export const rosterSchema = z
   })
   .strict();
 
+export const clockStatsSchema = z
+  .object({
+    /** The viewer's local day; "today", "this week" and "this month" hang off it. */
+    date: localDate,
+    /** Whose hours. Omitted means your own; anyone else is super admin only. */
+    userId: objectId.optional(),
+  })
+  .strict();
+
 /** An admin correcting someone's day — not self-service, see the service. */
 export const adjustShiftSchema = z
   .object({ userId: objectId, note: optionalText(200) })
@@ -49,3 +58,4 @@ export type ClockInInput = z.infer<typeof clockInSchema>;
 export type ClockOutInput = z.infer<typeof clockOutSchema>;
 export type MyShiftsQuery = z.infer<typeof myShiftsSchema>;
 export type RosterQuery = z.infer<typeof rosterSchema>;
+export type ClockStatsQuery = z.infer<typeof clockStatsSchema>;

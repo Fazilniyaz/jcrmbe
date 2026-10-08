@@ -276,6 +276,7 @@ model Company {
   teams         Team[]
   sprints       Sprint[]
   shifts        Shift[]
+  dailyReports  DailyReport[]
 }
 
 model Branch {
@@ -334,6 +335,10 @@ model User {
   kraEvents       KraEvent[]
   refreshTokens   RefreshToken[]
   shifts          Shift[]         @relation("ShiftUser")
+  // The daily work report, NOT the reporting line above — `reports` is already
+  // taken by the people who report to this user.
+  dailyReports    DailyReport[]   @relation("DailyReportUser")
+  ratedReports    DailyReport[]   @relation("DailyReportRater")
   joinedAt        DateTime        @default(now()) // = createdAt
   updatedAt       DateTime        @updatedAt
 
@@ -739,6 +744,53 @@ model Sprint {
   @@unique([projectId, name])
   @@index([companyId])
   @@index([projectId])
+}
+
+/**
+ * ---------------------------------------------------------- daily reports --
+ */
+
+/**
+ * What one person did on one day, and what a super admin thought of it.
+ *
+ * One row per person per day, enforced by the unique index: a day is a thing
+ * you revise, not a thing you file twice, so the write path is an upsert and
+ * the history stays one entry per date.
+ *
+ * The rating lives on the same row rather than in a table of its own. A star
+ * is a property of the day's report ("how was Tuesday"), it is given at most
+ * once, and keeping it here means no join to draw the only two views anyone
+ * asks for: an employee's own run of days, and a super admin's grid of
+ * everyone's.
+ */
+model DailyReport {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  companyId String    @db.ObjectId
+  company   Company   @relation(fields: [companyId], references: [id])
+  userId    String    @db.ObjectId
+  user      User      @relation("DailyReportUser", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// The author's local calendar day, YYYY-MM-DD — same convention as Shift.
+  date      String
+  /// What they did. Rich text, sanitised on the way in.
+  body      String
+  /// Optional one-line summary, for the super admin's grid.
+  headline  String?
+  /// 1-5, or null until a super admin has looked at it.
+  stars     Int?
+  /// Who rated it. Kept so a disputed star has a name against it.
+  ratedById String?   @db.ObjectId
+  ratedBy   User?     @relation("DailyReportRater", fields: [ratedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  ratedAt   DateTime?
+  /// What the super admin said alongside the stars.
+  feedback  String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // One report per person per day. The upsert in the service depends on this,
+  // and it doubles as the index for an employee's own run of days.
+  @@unique([userId, date])
+  // The super admin's grid: every report for one day.
+  @@index([companyId, date])
 }
 
 /**

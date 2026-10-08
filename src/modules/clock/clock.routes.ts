@@ -6,14 +6,23 @@ import {
   breakSchema,
   clockInSchema,
   clockOutSchema,
+  clockStatsSchema,
   myShiftsSchema,
   rosterSchema,
   type ClockInInput,
   type ClockOutInput,
+  type ClockStatsQuery,
   type MyShiftsQuery,
   type RosterQuery,
 } from "./clock.schema";
-import { clockIn, clockOut, getMyClock, getRoster, toggleBreak } from "./clock.service";
+import {
+  clockIn,
+  clockOut,
+  getClockStats,
+  getMyClock,
+  getRoster,
+  toggleBreak,
+} from "./clock.service";
 
 /*
  * Clock.
@@ -42,6 +51,15 @@ clockRouter.post("/out", validate({ body: clockOutSchema }), async (req, res) =>
 
 clockRouter.post("/break", validate({ body: breakSchema }), async (req, res) => {
   ok(res, await toggleBreak(actor(req)));
+});
+
+/*
+ * Your own hours, or — with ?userId — someone else's, which the service
+ * restricts to a super admin. One route for both so the Playground panel and
+ * the employee's own header read the same numbers by the same code.
+ */
+clockRouter.get("/stats", validate({ query: clockStatsSchema }), async (req, res) => {
+  ok(res, await getClockStats(actor(req), query<ClockStatsQuery>(req)));
 });
 
 clockRouter.get("/roster", validate({ query: rosterSchema }), async (req, res) => {

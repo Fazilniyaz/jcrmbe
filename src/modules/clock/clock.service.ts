@@ -4,7 +4,13 @@ import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { liveStatus, presenceOf } from "../../lib/presence";
 import { isSuperAdmin, type UserAuth } from "../../middleware/auth";
-import type { ClockInInput, ClockOutInput, MyShiftsQuery, RosterQuery } from "./clock.schema";
+import type {
+  ClockInInput,
+  ClockOutInput,
+  ClockStatsQuery,
+  MyShiftsQuery,
+  RosterQuery,
+} from "./clock.schema";
 
 /*
  * Attendance.
@@ -64,13 +70,41 @@ function shapeShift(shift: ShiftRow, now = new Date()) {
   };
 }
 
-/** The caller's shift in progress, if any. */
-async function openShiftFor(companyId: string, userId: string): Promise<ShiftRow | null> {
-  return prisma.shift.findFirst({
+/** Every shift this person has open. Normally none or one — see `claimOpenShift`. */
+async function openShiftsFor(companyId: string, userId: string): Promise<ShiftRow[]> {
+  return prisma.shift.findMany({
     where: { companyId, userId, outAt: null },
     select: SHIFT_SELECT,
-    orderBy: { inAt: "desc" },
+    orderBy: { inAt: "asc" },
   });
+}
+
+/**
+ * The caller's shift in progress, if any — and only ever one.
+ *
+ * MongoDB cannot express "at most one row per user where outAt is null" as a
+ * constraint Prisma can declare (a partial unique index is not in the schema
+ * language), so the invariant is kept here instead: if more than one open row
+ * is ever found, the EARLIEST wins and the rest are discarded on sight. Two
+ * open shifts made `workedMinutes` double-count and made "clocked in"
+ * ambiguous for the roster, which reads the open row.
+ *
+ * Discarding means deleting, not closing. A duplicate is an artifact of a
+ * double submit, so it is noise, not a shift someone worked; closing it would
+ * leave a one-second shift in the timesheet forever.
+ */
+async function openShiftFor(companyId: string, userId: string): Promise<ShiftRow | null> {
+  const open = await openShiftsFor(companyId, userId);
+  if (open.length <= 1) return open[0] ?? null;
+
+  const keep = open[0]!;
+  const extra = open.slice(1);
+  logger.warn(
+    { userId, keep: keep.id, discarded: extra.map((s) => s.id) },
+    "more than one open shift; keeping the earliest",
+  );
+  await prisma.shift.deleteMany({ where: { id: { in: extra.map((s) => s.id) } } });
+  return keep;
 }
 
 /* ------------------------------------------------------------ own clock -- */
@@ -105,7 +139,7 @@ export async function clockIn(auth: UserAuth, input: ClockInInput) {
   const existing = await openShiftFor(auth.companyId, auth.userId);
   if (existing) throw ApiError.badRequest("You are already clocked in.");
 
-  const shift = await prisma.shift.create({
+  const created = await prisma.shift.create({
     data: {
       companyId: auth.companyId,
       userId: auth.userId,
@@ -116,8 +150,28 @@ export async function clockIn(auth: UserAuth, input: ClockInInput) {
     select: SHIFT_SELECT,
   });
 
-  logger.info({ userId: auth.userId, shiftId: shift.id }, "clocked in");
-  return shapeShift(shift);
+  /*
+   * Insert, then check — the check above can be lost to a race.
+   *
+   * Two taps on the button, or one tap and a retry, send two requests; both
+   * read "no open shift" before either has written, and the company ends up
+   * with two shifts open at once. That is not hypothetical: it is in the data.
+   *
+   * There is no unique index to lean on (see `openShiftFor`), so the racers
+   * settle it after the fact, deterministically: re-read, and whoever did not
+   * insert the earliest row removes their own and reports the winner. Both
+   * callers get the same shift back, so a double tap reads as one clock-in
+   * rather than as an error, and nothing is left behind either way.
+   */
+  const winner = await openShiftFor(auth.companyId, auth.userId);
+  if (winner && winner.id !== created.id) {
+    await prisma.shift.deleteMany({ where: { id: created.id } });
+    logger.warn({ userId: auth.userId, lost: created.id, kept: winner.id }, "duplicate clock-in");
+    return shapeShift(winner);
+  }
+
+  logger.info({ userId: auth.userId, shiftId: created.id }, "clocked in");
+  return shapeShift(created);
 }
 
 /**
@@ -298,5 +352,156 @@ export async function getRoster(auth: UserAuth, queryInput: RosterQuery) {
       finished: out.filter((p) => p.shift?.date === queryInput.date).length,
       notStarted: out.filter((p) => p.shift?.date !== queryInput.date).length,
     },
+  };
+}
+
+/* ---------------------------------------------------------------- stats -- */
+
+/*
+ * Local-day arithmetic.
+ *
+ * Every date in this module is the person's own calendar day as a
+ * `YYYY-MM-DD` string, never an instant, so the maths below is done on the
+ * string through UTC parts. Using the server's local time zone here would move
+ * someone's week boundary to wherever the server happens to be hosted, and
+ * ISO dates sort lexicographically, so a range filter stays a string compare.
+ */
+
+function dayNumber(date: string): number {
+  const [y, m, d] = date.split("-").map(Number);
+  return Date.UTC(y!, m! - 1, d!);
+}
+
+function fromDayNumber(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function addDays(date: string, days: number): string {
+  return fromDayNumber(dayNumber(date) + days * 86_400_000);
+}
+
+/** 0 = Sunday, as `Date` has it. */
+function weekday(date: string): number {
+  return new Date(dayNumber(date)).getUTCDay();
+}
+
+/** The Monday of the week containing `date`. Weeks run Monday to Sunday. */
+function weekStartOf(date: string): string {
+  const dow = weekday(date);
+  return addDays(date, -((dow + 6) % 7));
+}
+
+function monthStartOf(date: string): string {
+  return `${date.slice(0, 7)}-01`;
+}
+
+export type ClockStats = Awaited<ReturnType<typeof getClockStats>>;
+
+/**
+ * Hours worked today, this week and this month, and how consistently.
+ *
+ * Read for yourself, or — super admin only — for anyone in the company, which
+ * is what the Playground person panel asks for.
+ *
+ * CONSISTENCY is the part worth explaining. It is days present over days the
+ * company was open, both counted from the data: a date the company was open is
+ * one where at least one person clocked in. Nothing in the schema says which
+ * days this company works, and assuming Monday-to-Friday would have marked a
+ * six-day week as 120% and a four-day week as chronically absent. Deriving the
+ * calendar from attendance costs one extra indexed query and is right for
+ * whatever week the company actually keeps, including public holidays, which
+ * simply never become expected days.
+ *
+ * Days before someone joined are not held against them either.
+ */
+export async function getClockStats(auth: UserAuth, queryInput: ClockStatsQuery) {
+  const targetId = queryInput.userId ?? auth.userId;
+  if (targetId !== auth.userId && !isSuperAdmin(auth)) {
+    throw ApiError.forbidden("Only a super admin can see someone else's hours.");
+  }
+
+  const user = await prisma.user.findFirst({
+    where: { id: targetId, companyId: auth.companyId },
+    select: { id: true, name: true, empId: true, joinedAt: true },
+  });
+  if (!user) throw ApiError.notFound("That employee is not in this company.");
+
+  const today = queryInput.date;
+  const weekStart = weekStartOf(today);
+  const monthStart = monthStartOf(today);
+  const from = weekStart < monthStart ? weekStart : monthStart;
+  const now = new Date();
+
+  const [shifts, companyDays] = await Promise.all([
+    prisma.shift.findMany({
+      where: {
+        companyId: auth.companyId,
+        userId: targetId,
+        // An open shift counts even if it started before the window — a night
+        // shift that began yesterday is time being worked right now.
+        OR: [{ date: { gte: from, lte: today } }, { outAt: null }],
+      },
+      select: SHIFT_SELECT,
+      orderBy: { inAt: "asc" },
+    }),
+    prisma.shift.findMany({
+      where: { companyId: auth.companyId, date: { gte: monthStart, lte: today } },
+      select: { date: true },
+      distinct: ["date"],
+      orderBy: { date: "asc" },
+    }),
+  ]);
+
+  const minutesByDay = new Map<string, number>();
+  for (const shift of shifts) {
+    minutesByDay.set(shift.date, (minutesByDay.get(shift.date) ?? 0) + workedMinutes(shift, now));
+  }
+
+  const sum = (lo: string, hi: string) => {
+    let total = 0;
+    for (const [day, minutes] of minutesByDay) if (day >= lo && day <= hi) total += minutes;
+    return total;
+  };
+
+  const joined = user.joinedAt.toISOString().slice(0, 10);
+  const expected = companyDays.map((d) => d.date).filter((d) => d >= joined);
+  const present = expected.filter((d) => (minutesByDay.get(d) ?? 0) > 0);
+
+  /*
+   * The streak ends at the last expected day that has already had a chance to
+   * happen. Today is skipped while it is still empty — a count that read 0
+   * every morning until the person clocked in, then jumped back to 12, would
+   * be measuring the hour of the day rather than the habit.
+   */
+  const walk = [...expected].reverse();
+  if (walk[0] === today && !minutesByDay.get(today)) walk.shift();
+  let streak = 0;
+  for (const day of walk) {
+    if (!minutesByDay.get(day)) break;
+    streak += 1;
+  }
+
+  const monthMinutes = sum(monthStart, today);
+
+  return {
+    user: { id: user.id, name: user.name, empId: user.empId },
+    date: today,
+    weekStart,
+    monthStart,
+    todayMinutes: minutesByDay.get(today) ?? 0,
+    weekMinutes: sum(weekStart, today),
+    monthMinutes,
+    /** Null rather than 0 when the company has no attendance to compare with. */
+    consistency: expected.length ? Math.round((present.length / expected.length) * 100) : null,
+    daysPresent: present.length,
+    daysExpected: expected.length,
+    streak,
+    averageMinutes: present.length ? Math.round(monthMinutes / present.length) : 0,
+    /** The month to date, for the bar strip. Absent days are included as 0. */
+    days: expected.map((day) => ({
+      date: day,
+      minutes: minutesByDay.get(day) ?? 0,
+      present: (minutesByDay.get(day) ?? 0) > 0,
+    })),
   };
 }

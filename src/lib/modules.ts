@@ -23,6 +23,10 @@ export const MODULE_SLUGS = [
   "performance",
   "leaveRequests",
   "clock",
+  // The daily work report. Every employee role gets it below — a client or a
+  // vendor does not write up their day — and reading across people is a role
+  // check in the service, not a module level.
+  "reports",
   "salary",
   "payments",
   "leads",
@@ -95,6 +99,7 @@ const BY_ROLE: Record<Role, readonly ModuleSlug[]> = {
     "performance",
     "leaveRequests",
     "clock",
+    "reports",
     "calendar",
   ],
   teamLeader: [
@@ -109,6 +114,7 @@ const BY_ROLE: Record<Role, readonly ModuleSlug[]> = {
     "performance",
     "leaveRequests",
     "clock",
+    "reports",
     "calendar",
   ],
   developer: [
@@ -121,6 +127,7 @@ const BY_ROLE: Record<Role, readonly ModuleSlug[]> = {
     "performance",
     "leaveRequests",
     "clock",
+    "reports",
     "calendar",
   ],
   qualityCheck: [
@@ -133,6 +140,7 @@ const BY_ROLE: Record<Role, readonly ModuleSlug[]> = {
     "performance",
     "leaveRequests",
     "clock",
+    "reports",
     "calendar",
   ],
   sales: [
@@ -143,6 +151,7 @@ const BY_ROLE: Record<Role, readonly ModuleSlug[]> = {
     "performance",
     "leaveRequests",
     "clock",
+    "reports",
     "calendar",
   ],
   client: ["monitor", "communication"],
