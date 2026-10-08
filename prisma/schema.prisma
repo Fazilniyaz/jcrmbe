@@ -520,6 +520,25 @@ model Task {
   // the grouped counts and the "release this sprint's tasks" update filter on
   // sprintId. Without this each one is a collection scan.
   @@index([companyId, sprintId])
+
+  /*
+   * The three MULTIKEY indexes the visibility filter actually needs.
+   *
+   * `visibilityWhere` — the clause behind every task read a non-superAdmin
+   * makes — matches on `projectIds hasSome`, `assigneeIds has` and
+   * `reportToIds has`. None of those are the singular `projectId` /
+   * `assigneeId` above, so until now every one of them was a collection scan:
+   * the indexes that existed covered the denormalised PRIMARY of each list and
+   * nothing covered the list. MongoDB indexes an array field per element
+   * (multikey), so these are exactly the same kind of index, over the field the
+   * query names.
+   *
+   * companyId leads each one because it is an equality match present in every
+   * clause, which is the prefix MongoDB can seek on before walking the array.
+   */
+  @@index([companyId, assigneeIds])
+  @@index([companyId, projectIds])
+  @@index([companyId, reportToIds])
 }
 
 /**

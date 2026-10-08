@@ -132,6 +132,21 @@ const schema = z.object({
    * uploads and delivery URLs server-side and must never be handed to a
    * browser; the client never talks to ImageKit directly, it talks to us.
    */
+  /*
+   * The key the project vault is encrypted with, at rest. See lib/secretBox.ts.
+   *
+   * Optional so the API boots unchanged on a deployment that has never set it
+   * — the vault then stores plaintext exactly as it did before, with a warning
+   * at startup. Base64 or hex, and it must decode to exactly 32 bytes:
+   *
+   *   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+   *
+   * Rotating it does NOT re-encrypt what is already stored. Values written
+   * under the old key stop decrypting and read as empty until re-saved, which
+   * is why this is listed as a secret to keep rather than a secret to cycle.
+   */
+  SECRETS_KEY: z.string().optional().default(""),
+
   IMAGEKIT_PUBLIC_KEY: z.string().optional().default(""),
   IMAGEKIT_PRIVATE_KEY: z.string().optional().default(""),
   IMAGEKIT_URL_ENDPOINT: z

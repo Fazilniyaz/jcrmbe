@@ -3,6 +3,7 @@ import { ApiError } from "../../lib/errors";
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { embeddedId, nextProjectCode } from "../../lib/codes";
+import { open, seal, secretsEncryptionEnabled } from "../../lib/secretBox";
 import { isLead, isSuperAdmin, type UserAuth } from "../../middleware/auth";
 import { notify } from "../notifications/notifications.service";
 import { membersOfTeams } from "../teams/teams.service";
@@ -893,7 +894,10 @@ async function readSecrets(projectId: string) {
     where: { id: projectId },
     select: { secrets: true },
   });
-  return project?.secrets ?? [];
+  // Decrypted on the way out, so the wire shape is unchanged and the frontend
+  // needed no edit. A row written before SECRETS_KEY existed passes straight
+  // through — see lib/secretBox.ts for why that stays supported.
+  return (project?.secrets ?? []).map((s) => ({ ...s, value: open(s.value) }));
 }
 
 export async function getSecrets(auth: UserAuth, projectId: string) {
@@ -914,7 +918,10 @@ export async function setSecrets(auth: UserAuth, projectId: string, input: Secre
   const secrets = input.secrets.map((s) => ({
     id: s.id || embeddedId("sec"),
     key: s.key,
-    value: s.value,
+    // Sealed on the way in, so plaintext never reaches the collection. The
+    // response below returns `input` values, not these, because the caller
+    // just typed them and handing back ciphertext would blank their own form.
+    value: seal(s.value),
     env: s.env,
     note: s.note ?? null,
     updatedAt: now,
@@ -922,6 +929,9 @@ export async function setSecrets(auth: UserAuth, projectId: string, input: Secre
   }));
 
   await prisma.project.update({ where: { id: projectId }, data: { secrets } });
-  logger.info({ projectId, by: auth.userId, count: secrets.length }, "project vault updated");
-  return secrets;
+  logger.info(
+    { projectId, by: auth.userId, count: secrets.length, encrypted: secretsEncryptionEnabled },
+    "project vault updated",
+  );
+  return secrets.map((s, i) => ({ ...s, value: input.secrets[i]?.value ?? "" }));
 }
