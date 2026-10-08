@@ -1,0 +1,22 @@
+{
+  /*
+   * The deploy build.
+   *
+   * `tsconfig.json` deliberately type-checks everything in the repo — the
+   * Vercel handler in api/, the seed in prisma/, the one-off scripts — and a
+   * rootDir of "." is what lets it. But rootDir is also what decides the SHAPE
+   * of dist: with the repo root as the root, the entry point lands at
+   * dist/src/index.js, while package.json, PM2 and every runbook say
+   * dist/index.js. That mismatch cost an evening on the first deploy.
+   *
+   * So the build narrows the root to src and compiles only src. Type-checking
+   * stays whole (`npm run typecheck`), and dist keeps the one layout the rest
+   * of the world expects.
+   */
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"]
+}

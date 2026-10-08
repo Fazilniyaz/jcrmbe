@@ -2,6 +2,7 @@ import { createApp } from "./app";
 import { env } from "./config/env";
 import { logger } from "./lib/logger";
 import { disconnectPrisma, prisma } from "./lib/prisma";
+import { closeRealtime, initRealtime } from "./lib/realtime";
 
 async function main() {
   // Fail at boot rather than on the first request: a bad DATABASE_URL should
@@ -38,9 +39,14 @@ async function main() {
     }
   });
 
+  // Shares the HTTP server, so realtime needs no second port and nothing in
+  // front has to route anywhere new — only the upgrade headers for /socket.io.
+  initRealtime(server);
+
   const shutdown = (signal: string) => {
     logger.info({ signal }, "shutting down");
     server.close(async () => {
+      await closeRealtime();
       await disconnectPrisma();
       process.exit(0);
     });

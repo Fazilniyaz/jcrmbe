@@ -7,6 +7,7 @@ import { env } from "./config/env";
 import { logger } from "./lib/logger";
 import { errorHandler, notFoundHandler } from "./middleware/error";
 import { rejectOperators } from "./middleware/validate";
+import { broadcastChanges } from "./middleware/realtime";
 import { apiLimiter } from "./middleware/rateLimit";
 import { ApiError } from "./lib/errors";
 import { router } from "./routes";
@@ -70,6 +71,7 @@ export function createApp() {
 
   app.use(rejectOperators);
   app.use(apiLimiter);
+  app.use(broadcastChanges);
 
   app.get("/health", (_req, res) => {
     res.json({ data: { status: "ok", uptime: Math.round(process.uptime()) } });
