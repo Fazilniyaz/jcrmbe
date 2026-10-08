@@ -130,12 +130,20 @@ export function open(stored: string): string {
     return "";
   }
 
-  const parts = stored.split(".");
-  if (parts.length !== 4) {
+  /*
+   * The prefix is stripped BEFORE splitting, because `PREFIX` itself contains
+   * a dot. Splitting the whole string gives five parts — ["enc", "v1", iv,
+   * tag, body] — not four, so a `parts.length !== 4` check rejected every
+   * value this module had just written and the whole vault read as empty.
+   * Measured from the prefix instead, the count is about the envelope's own
+   * fields and stays correct whatever `PREFIX` is.
+   */
+  const parts = stored.slice(PREFIX.length + 1).split(".");
+  if (parts.length !== 3) {
     logger.error("vault value has a malformed envelope");
     return "";
   }
-  const [, ivPart, tagPart, bodyPart] = parts as [string, string, string, string];
+  const [ivPart, tagPart, bodyPart] = parts as [string, string, string];
 
   try {
     const decipher = crypto.createDecipheriv(

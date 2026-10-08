@@ -14,6 +14,7 @@
     "seed": "tsx prisma/seed.ts",
     "hash-master": "tsx scripts/hash-master.ts",
     "verify:tokens": "tsx scripts/verify-tokens.ts",
+    "verify:vault": "tsx scripts/verify-vault.ts",
     "migrate:task-states": "tsx scripts/migrate-task-states.ts",
     "migrate:task-states:apply": "tsx scripts/migrate-task-states.ts --apply"
   },
