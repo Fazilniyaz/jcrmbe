@@ -458,7 +458,7 @@ export async function createTask(auth: UserAuth, input: CreateTaskInput) {
     select: TASK_SELECT,
   });
 
-  await refreshOpenWork(assigneeIds);
+  await refreshOpenWork(auth.companyId, assigneeIds);
 
   await notify(auth.companyId, assigneeIds, {
     kind: "task-assigned",
@@ -592,7 +592,7 @@ export async function updateTask(auth: UserAuth, id: string, input: UpdateTaskIn
     });
   }
 
-  await refreshOpenWork([...new Set([...before.assigneeIds, ...assigneeIds])]);
+  await refreshOpenWork(auth.companyId, [...new Set([...before.assigneeIds, ...assigneeIds])]);
 
   // The spec's secondary KRA rule, kept dormant behind kraApplied: the frontend
   // never sets `failed`, so this only fires if something deliberately does.
@@ -608,7 +608,7 @@ export async function deleteTask(auth: UserAuth, id: string) {
   await assertCanEdit(auth, task, "full");
 
   await prisma.task.delete({ where: { id } });
-  await refreshOpenWork(task.assigneeIds);
+  await refreshOpenWork(auth.companyId, task.assigneeIds);
 
   logger.warn({ taskId: id, by: auth.userId }, "task deleted");
 }
@@ -799,7 +799,7 @@ export async function submitQcReview(auth: UserAuth, taskId: string, input: QcRe
   }[input.verdict];
 
   await notify(auth.companyId, task.assigneeIds, { ...outcome, taskId, projectId: task.projectId });
-  await refreshOpenWork(task.assigneeIds);
+  await refreshOpenWork(auth.companyId, task.assigneeIds);
 
   logger.info(
     { taskId, verdict: input.verdict, deduction, affected: affected.length, by: auth.userId },
@@ -861,7 +861,7 @@ async function applyFailureDeduction(auth: UserAuth, task: TaskRow) {
  * recomputed from the tasks themselves after anything that could change it
  * rather than incremented — an increment that misses one path drifts forever.
  */
-async function refreshOpenWork(userIds: readonly string[]) {
+async function refreshOpenWork(companyId: string, userIds: readonly string[]) {
   const unique = [...new Set(userIds)].filter(Boolean);
   if (unique.length === 0) return;
 
@@ -871,9 +871,17 @@ async function refreshOpenWork(userIds: readonly string[]) {
    * This runs after every task write, and a task with six assignees was costing
    * six full table scans plus six updates before the response could be sent —
    * which is most of why a board felt slow to settle after a change.
+   *
+   * `companyId` is not a correctness fix — assigneeIds are ObjectIds and so are
+   * globally unique, meaning the old clause could never actually have counted
+   * another tenant's task against one of our users. It is an INDEX fix. Without
+   * an equality term that a compound index can lead on, the `hasSome` had
+   * nothing to seek and scanned the whole Task collection — every tenant's
+   * rows — on every single task write. With `@@index([companyId, assigneeIds])`
+   * the same query seeks straight to this company's slice.
    */
   const tasks = await prisma.task.findMany({
-    where: { assigneeIds: { hasSome: [...unique] } },
+    where: { companyId, assigneeIds: { hasSome: [...unique] } },
     select: { assigneeIds: true, state: true },
   });
 
