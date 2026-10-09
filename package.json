@@ -15,6 +15,7 @@
     "hash-master": "tsx scripts/hash-master.ts",
     "verify:tokens": "tsx scripts/verify-tokens.ts",
     "verify:vault": "tsx scripts/verify-vault.ts",
+    "verify:contracts": "tsx scripts/verify-contracts.ts",
     "migrate:task-states": "tsx scripts/migrate-task-states.ts",
     "migrate:task-states:apply": "tsx scripts/migrate-task-states.ts --apply"
   },
